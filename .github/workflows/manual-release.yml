@@ -72,16 +72,20 @@ jobs:
           $releaseBody | Set-Content -Path $bodyPath -NoNewline
           "body_path=$bodyPath" >> $env:GITHUB_OUTPUT
 
-      - name: Build Release x64 binaries
+      - name: Build Release hook DLL
         shell: pwsh
-        run: msbuild BlockTheSpot.slnx /m /p:Configuration=Release /p:Platform=x64
+        run: msbuild Hook/Hook.vcxproj /m /p:Configuration=Release /p:Platform=x64
+
+      - name: Build Debug loader DLL
+        shell: pwsh
+        run: msbuild Loader/Loader.vcxproj /m /p:Configuration=Debug /p:Platform=x64
 
       - name: Collect release assets
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item out/x64/Release/blockthespot.dll dist/blockthespot.dll -Force
-          Copy-Item out/x64/Release/chrome_elf.dll dist/chrome_elf.dll -Force
+          Copy-Item out/x64/Debug/chrome_elf.dll dist/chrome_elf.dll -Force
           Copy-Item config.ini dist/config.ini -Force
 
       - name: Create GitHub release
