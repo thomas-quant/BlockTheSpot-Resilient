@@ -74,11 +74,11 @@ jobs:
 
       - name: Build Release hook DLL
         shell: pwsh
-        run: msbuild Hook/Hook.vcxproj /m /p:Configuration=Release /p:Platform=x64
+        run: msbuild Hook/Hook.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir="$env:GITHUB_WORKSPACE\\"
 
       - name: Build Debug loader DLL
         shell: pwsh
-        run: msbuild Loader/Loader.vcxproj /m /p:Configuration=Debug /p:Platform=x64
+        run: msbuild Loader/Loader.vcxproj /m /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$env:GITHUB_WORKSPACE\\"
 
       - name: Collect release assets
         shell: pwsh
