@@ -1,0 +1,98 @@
+name: Manual Build And Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Optional release tag. Leave empty to auto-generate one."
+        required: false
+        type: string
+      release_name:
+        description: "Optional release name. Leave empty to use the generated default."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the GitHub release as a prerelease."
+        required: false
+        default: false
+        type: boolean
+      draft:
+        description: "Create the GitHub release as a draft."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-2022
+
+    steps:
+      - name: Ensure workflow runs from master
+        if: github.ref_name != 'master'
+        shell: pwsh
+        run: |
+          Write-Error "This workflow can only be run from the master branch."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $spotifyVersion = (Get-Content config.ini | Select-Object -First 2 | Select-Object -Last 1).TrimStart(";").Trim()
+          $tag = "${{ inputs.tag_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "v$spotifyVersion-build.${{ github.run_number }}"
+          }
+
+          $releaseName = "${{ inputs.release_name }}"
+          if ([string]::IsNullOrWhiteSpace($releaseName)) {
+            $releaseName = "BlockTheSpot $spotifyVersion"
+          }
+
+          $releaseBody = @"
+          Manual release built from master.
+
+          Spotify version: $spotifyVersion
+          Commit: $env:GITHUB_SHA
+          Workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+          "@
+
+          "spotify_version=$spotifyVersion" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "release_name=$releaseName" >> $env:GITHUB_OUTPUT
+          $bodyPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          $releaseBody | Set-Content -Path $bodyPath -NoNewline
+          "body_path=$bodyPath" >> $env:GITHUB_OUTPUT
+
+      - name: Build Release x64 binaries
+        shell: pwsh
+        run: msbuild BlockTheSpot.slnx /m /p:Configuration=Release /p:Platform=x64
+
+      - name: Collect release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item out/x64/Release/blockthespot.dll dist/blockthespot.dll -Force
+          Copy-Item out/x64/Release/chrome_elf.dll dist/chrome_elf.dll -Force
+          Copy-Item config.ini dist/config.ini -Force
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.release_name }}
+          body_path: ${{ steps.meta.outputs.body_path }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          files: |
+            dist/blockthespot.dll
+            dist/chrome_elf.dll
+            dist/config.ini

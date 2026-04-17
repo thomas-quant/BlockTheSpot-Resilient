@@ -10,6 +10,70 @@
 static inline size_t cef_buffer_modify_count = 0;
 static inline char cef_buffer_list[MAX_CEF_BUFFER_MODIFY_LIST][MAX_URL_LEN] = {};
 
+#ifdef _DEBUG
+static void debug_dump_target_file(const char* file_name, const void* buffer, size_t bufferSize) noexcept
+{
+	if (!file_name || !buffer || 0 == bufferSize || bufferSize > MAXDWORD) {
+		return;
+	}
+
+	static bool dumped_snapshot = false;
+	static bool dumped_pip = false;
+	bool* dumped = nullptr;
+	const char* output_name = nullptr;
+
+	if (0 == lstrcmpiA(file_name, "xpui-snapshot.js")) {
+		dumped = &dumped_snapshot;
+		output_name = "dump_xpui-snapshot.js";
+	}
+	else if (0 == lstrcmpiA(file_name, "xpui-pip-mini-player.js")) {
+		dumped = &dumped_pip;
+		output_name = "dump_xpui-pip-mini-player.js";
+	}
+
+	if (!dumped || *dumped) {
+		return;
+	}
+
+	const HANDLE file = CreateFileA(
+		output_name,
+		GENERIC_WRITE,
+		FILE_SHARE_READ,
+		nullptr,
+		CREATE_ALWAYS,
+		FILE_ATTRIBUTE_NORMAL,
+		nullptr
+	);
+
+	if (INVALID_HANDLE_VALUE == file) {
+		return;
+	}
+
+	DWORD written = 0;
+	if (FALSE != WriteFile(
+		file,
+		buffer,
+		static_cast<DWORD>(bufferSize),
+		&written,
+		nullptr)) {
+		*dumped = true;
+		_snprintf_s(
+			shared_buffer,
+			SHARED_BUFFER_SIZE,
+			_TRUNCATE,
+			"debug_dump_target_file: wrote %s (%lu bytes)",
+			output_name,
+			static_cast<unsigned long>(written)
+		);
+		log_info(shared_buffer);
+	}
+
+	CloseHandle(file);
+}
+#else
+static void debug_dump_target_file(const char* file_name, const void* buffer, size_t bufferSize) noexcept {}
+#endif
+
 using cef_zip_reader_create_t = void* (*)(void* stream);
 static inline cef_zip_reader_create_t cef_zip_reader_create_orig = nullptr;
 static inline cef_zip_reader_create_t cef_zip_reader_create_impl = nullptr;
@@ -34,8 +98,8 @@ static inline bool do_patch_buffer(const char* file_name, const char* patch_name
 	constexpr auto PAIR_MODIFY = 2;
 	Modify modify[PAIR_MODIFY] = {};
 
-	bool is_pair = true;
 	char temp_buffer[SHARED_BUFFER_SIZE];
+	size_t modify_count = 0;
 
 	for (size_t i = 0; i < PAIR_MODIFY; ++i) {
 		const size_t display_idx = i + 1;
@@ -53,7 +117,6 @@ static inline bool do_patch_buffer(const char* file_name, const char* patch_name
 		if (0 == signature_raw_length) {
 			_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "do_patch_buffer: %s %s signature_%zu empty, stop processing", file_name, patch_name, display_idx);
 			log_debug(shared_buffer);
-			is_pair = false;
 			break;
 		}
 
@@ -66,8 +129,7 @@ static inline bool do_patch_buffer(const char* file_name, const char* patch_name
 		if (SIZE_MAX == signature_hex_size) {
 			_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "do_patch_buffer: %s %s signature_%zu parse fail, limit exceed", file_name, patch_name, display_idx);
 			log_debug(shared_buffer);
-			is_pair = false;
-			break;
+			return false;
 		}
 
 		modify[i].mask[signature_hex_size] = '\0';
@@ -100,34 +162,36 @@ static inline bool do_patch_buffer(const char* file_name, const char* patch_name
 		if (SIZE_MAX == modify[i].patch_size) {
 			_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "do_patch_buffer: %s %s signature_%zu parse hex limit exceed", file_name, patch_name, display_idx);
 			log_debug(shared_buffer);
-			is_pair = false;
-			break;
+			return false;
 		}
 
 		if (modify[i].patch_size > signature_hex_size) {
 			_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "do_patch_buffer: %s %s signature_%zu patch_size > signature_hex_size", file_name, patch_name, display_idx);
 			log_debug(shared_buffer);
-			is_pair = false;
-			break;
+			return false;
 		}
+
+		modify_count = display_idx;
 	}
 
-	if (false == is_pair) {
+	if (0 == modify_count) {
+		return false;
+	}
+
+	for (size_t i = 0; i < modify_count; ++i) {
+		const size_t display_idx = i + 1;
 		const auto address = FindPattern(
 			reinterpret_cast<BYTE*>(buffer),
 			static_cast<DWORD>(bufferSize),
-			modify[0].signature,
-			reinterpret_cast<char*>(&modify[0].mask)
+			modify[i].signature,
+			reinterpret_cast<char*>(&modify[i].mask)
 		);
 		if (nullptr == address) {
-			_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "do_patch_buffer: %s %s FindPattern failed.", file_name, patch_name);
+			_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "do_patch_buffer: %s %s signature_%zu FindPattern failed.", file_name, patch_name, display_idx);
 			log_debug(shared_buffer);
 			return false;
 		}
-		if (address) {
-			memcpy(address + modify[0].offset, modify[0].value, modify[0].patch_size);
-		}
-		return true;
+		memcpy(address + modify[i].offset, modify[i].value, modify[i].patch_size);
 	}
 
 	return true;
@@ -180,6 +244,8 @@ int CALLBACK cef_zip_reader_read_file_hook(void* self, void* buffer, size_t buff
 		return _retval;
 	}
 
+	debug_dump_target_file(ansi_file_name, buffer, bufferSize);
+
 	const bool do_patch = need_patch(ansi_file_name);
 
 	char log_buf[256]{};
@@ -217,7 +283,7 @@ void* cef_zip_reader_create_hook(void* stream)
 	cef_zip_reader_t_read_file_orig = (_cef_zip_reader_t_read_file)zip_reader->read_file;
 #else
 	auto zip_reader = cef_zip_reader_create_orig(stream);
-	cef_zip_reader_read_file_orig = 
+	cef_zip_reader_read_file_orig =
 		get_funct_t<cef_zip_reader_read_file_t>(
 			zip_reader, CEF_ZIP_READER_GET_READ_FILE_OFFSET);
 	overwrite_funct_t<cef_zip_reader_read_file_t>(
