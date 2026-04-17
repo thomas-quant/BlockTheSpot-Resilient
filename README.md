@@ -1,52 +1,68 @@
 <center>
-	<h1 align="center">BlockTheSpot</h1> 
-	<h4 align="center">A multi-purpose adblocker and skip-bypass for the <strong>Spotify for Windows (64 bit)</strong> </h4>
-    <h5 align="center">Please support Spotify by purchasing premium</h5>
-    <p align="center">
-        <strong>Last updated:</strong> 12 February 2026<br>
-        <strong>Last tested version:</strong> see `config.ini`
-    </p> 
+  <h1 align="center">BlockTheSpot</h1>
+  <h4 align="center">A multi-purpose adblocker and skip-bypass for <strong>Spotify for Windows (64 bit)</strong></h4>
+  <h5 align="center">Please support Spotify by purchasing premium</h5>
+  <p align="center">
+    <a href="https://github.com/Nuzair46/BlockTheSpot/releases/latest"><img src="https://raw.githubusercontent.com/Nuzair46/BlockTheSpot-Installer/main/assets/blockthespot.png" alt="BlockTheSpot" /></a>
+  </p>
 </center>
 
-### Virus warning on windows defender issue:
-* The code is on Github, everyone can check it.
-* false positive can happen. but don't trust me on this, try verify by compile your own BTS and compare with the release.
+[![Build status](https://github.com/Nuzair46/BlockTheSpot/actions/workflows/manual-release.yml/badge.svg?branch=master)](https://github.com/Nuzair46/BlockTheSpot/actions/workflows/manual-release.yml) [![Discord](https://discord.com/api/guilds/807273906872123412/widget.png)](https://discord.gg/eYudMwgYtY) ![Downloads](https://img.shields.io/github/downloads/Nuzair46/BlockTheSpot/total.svg)
 
-### Features:
-* Focus mainly on block listening ads and performance, cosmetic aren't main purpose.
+## Overview
 
-#### Experimental features from developer mode
-- Click on the 2 dots in the top left corner of Spotify > Develop > Show debug window. Play around with the options.
-- Enable/disable feature by yourself in realtime and on demand.
+BlockTheSpot focuses on the Windows desktop client and keeps the patch surface small:
 
-:warning: This mod is for the [**Desktop Application**](https://www.spotify.com/download/windows/) of Spotify on Windows only and **not the Microsoft Store version**.
+- blocks ad-related requests
+- applies signature-based SPA patches through `config.ini`
+- enables Spotify's hidden developer menu
 
-#### Fresh installation
-1. Browse to your Spotify installation folder `%APPDATA%\Spotify`
-2. Rename `chrome_elf.dll` to `chrome_elf_required.dll`
-3. Download `chrome_elf.dll` and `blockthespot.dll`from [releases](https://github.com/mrpond/BlockTheSpot/releases)
-4. Put downloaded file from 3 to Spotify directory. 
-5. Download latest [config.ini](https://github.com/mrpond/BlockTheSpot/blob/master/config.ini) from github to Spotify directory. 
+This project is for the standard [Spotify desktop app](https://www.spotify.com/download/windows/) only. It does not support the Microsoft Store build.
 
-#### Update from spotify
-1. Browse to your Spotify installation folder `%APPDATA%\Spotify`
-2. Delete `chrome_elf_required.dll` and `blockthespot.dll`
-3. Rename `chrome_elf.dll` to `chrome_elf_required.dll`
-4. Download `chrome_elf.dll` and `blockthespot.dll`from [releases](https://github.com/mrpond/BlockTheSpot/releases)
-5. Put downloaded file from 4 to Spotify directory. 
-6. Download latest [config.ini](https://github.com/mrpond/BlockTheSpot/blob/master/config.ini) from github to Spotify directory. 
+## Requirements
 
-### Uninstall:
-1. Remove `chrome_elf.dll`, `blockthespot.dll` and `config.ini` from Spotify directory.
-2. Rename `chrome_elf_required.dll` to `chrome_elf.dll`
+- Windows 64-bit
+- Spotify desktop client installed in `%APPDATA%\Spotify`
+- Spotify fully closed before install, update, or uninstall
 
-or just reinstall Spotify
+## Fresh install
 
-### Additional Notes:
+1. Open `%APPDATA%\Spotify`.
+2. Rename the original `chrome_elf.dll` to `chrome_elf_required.dll`.
+3. Download the latest release assets: `chrome_elf.dll`, `blockthespot.dll`, and `config.ini`.
+4. Copy those files into `%APPDATA%\Spotify`.
+5. Start Spotify.
 
-* For more support and discussions, join our [Discord server](https://discord.gg/eYudMwgYtY).
+## Update after Spotify updates
 
+1. Close Spotify completely.
+2. Open `%APPDATA%\Spotify`.
+3. Remove the custom `chrome_elf.dll`, `blockthespot.dll`, and `config.ini`.
+4. If Spotify restored its stock `chrome_elf.dll`, rename it to `chrome_elf_required.dll`.
+5. Download the latest release assets again.
+6. Copy `chrome_elf.dll`, `blockthespot.dll`, and `config.ini` into `%APPDATA%\Spotify`.
+7. Start Spotify.
 
+## Uninstall
 
+1. Close Spotify.
+2. Remove `chrome_elf.dll`, `blockthespot.dll`, and `config.ini` from `%APPDATA%\Spotify`.
+3. Rename `chrome_elf_required.dll` back to `chrome_elf.dll`.
+4. Start Spotify again, or reinstall Spotify if you want a completely clean state.
 
+## Experimental developer features
 
+1. Open Spotify.
+2. Click the two dots in the top-left corner.
+3. Go to `Develop > Show debug window`.
+4. Toggle experimental options there as needed.
+
+## Defender warning
+
+- Unsigned DLLs can trigger false positives in Windows Defender or other antivirus products.
+- The source is fully available on GitHub for inspection.
+- If you do not trust prebuilt binaries, build from source and compare the outputs yourself.
+
+## Support
+
+- Discord: https://discord.gg/eYudMwgYtY

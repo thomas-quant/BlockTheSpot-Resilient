@@ -12,3 +12,10 @@
 /.vs
 /out
 /temp
+/.codex
+/dist
+/Loader/Debug
+/tmp_extract
+/tmp_extract_all
+/tmp_live_backup_*/
+/dump_*.js
