@@ -143,3 +143,5 @@ jobs:
           "@
           $body | Out-File -FilePath issue.md -Encoding utf8
           gh issue create --title "Spotify ${{ steps.spot.outputs.version }}: patch signature needs re-deriving" --body-file issue.md
+
+# registered 2026-07-04T07:03:39Z
