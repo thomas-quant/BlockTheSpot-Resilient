@@ -1,68 +1,73 @@
-<center>
-  <h1 align="center">BlockTheSpot</h1>
-  <h4 align="center">A multi-purpose adblocker and skip-bypass for <strong>Spotify for Windows (64 bit)</strong></h4>
-  <h5 align="center">Please support Spotify by purchasing premium</h5>
-  <p align="center">
-    <a href="https://github.com/Nuzair46/BlockTheSpot/releases/latest"><img src="https://raw.githubusercontent.com/Nuzair46/BlockTheSpot-Installer/main/assets/blockthespot.png" alt="BlockTheSpot" /></a>
-  </p>
-</center>
+<div align="center">
 
-[![Build status](https://github.com/Nuzair46/BlockTheSpot/actions/workflows/manual-release.yml/badge.svg?branch=master)](https://github.com/Nuzair46/BlockTheSpot/actions/workflows/manual-release.yml) [![Discord](https://discord.com/api/guilds/807273906872123412/widget.png)](https://discord.gg/eYudMwgYtY) ![Downloads](https://img.shields.io/github/downloads/Nuzair46/BlockTheSpot/total.svg)
+# BlockTheSpot-Resilient
 
-## Overview
+**Block Spotify ads on Windows — without breaking every time Spotify updates.**
 
-BlockTheSpot focuses on the Windows desktop client and keeps the patch surface small:
+[![Latest release](https://img.shields.io/github/v/release/thomas-quant/BlockTheSpot-Resilient?label=latest%20build&color=1DB954)](https://github.com/thomas-quant/BlockTheSpot-Resilient/releases/latest)
+[![Stars](https://img.shields.io/github/stars/thomas-quant/BlockTheSpot-Resilient?color=1DB954)](https://github.com/thomas-quant/BlockTheSpot-Resilient/stargazers)
+![Platform](https://img.shields.io/badge/platform-Windows%20x64-blue)
 
-- blocks ad-related requests
-- applies signature-based SPA patches through `config.ini`
-- enables Spotify's hidden developer menu
+</div>
 
-This project is for the standard [Spotify desktop app](https://www.spotify.com/download/windows/) only. It does not support the Microsoft Store build.
+---
 
-## Requirements
+A maintained, **update-resilient** take on [BlockTheSpot](https://github.com/mrpond/BlockTheSpot) — the classic Spotify ad blocker whose original repo is now archived and which breaks on nearly every Spotify update. This fork fixes the two things that made the original painful:
 
-- Windows 64-bit
-- Spotify desktop client installed in `%APPDATA%\Spotify`
-- Spotify fully closed before install, update, or uninstall
+- 🛡️ **It doesn't crash when Spotify updates.** The original hard-codes internal offsets into `config.ini`; when Spotify shifts them, Spotify won't even launch (`0xC0000005`). This version **detects them at runtime** and **guards every access** — a mismatch degrades to "ads not blocked" instead of a dead app.
+- 🤖 **It watches Spotify for you.** A CI job checks daily for new Spotify releases, verifies the patches still match, publishes a fresh build, and **opens an issue if anything went stale** — so you're never silently broken.
 
-## Fresh install
+## Why this vs. the alternatives
 
-1. Open `%APPDATA%\Spotify`.
-2. Rename the original `chrome_elf.dll` to `chrome_elf_required.dll`.
-3. Download the latest release assets: `chrome_elf.dll`, `blockthespot.dll`, and `config.ini`.
-4. Copy those files into `%APPDATA%\Spotify`.
-5. Start Spotify.
+| | **This (Resilient)** | BlockTheSpot (original) | SpotX |
+|---|:---:|:---:|:---:|
+| Survives Spotify updates without crashing | ✅ runtime offset detect + guard | ❌ crashes, needs manual offset edit | ⚠️ re-run each update |
+| Auto-builds + alerts when Spotify updates | ✅ CI watcher | ❌ | ❌ |
+| Blocks audio + banner ads | ✅ | ✅ *(signatures rot)* | ✅ |
+| Patches your **official** Spotify in place | ✅ | ✅ | ⚠️ downloads Spotify from a 3rd-party mirror |
+| Keeps Spotify's code signatures intact | ✅ redirects the check | ✅ | ❌ strips signatures |
+| Auditable install | ✅ ~40-line PowerShell | ⚠️ compiled installer | ⚠️ remote `iwr\|iex` script |
 
-## Update after Spotify updates
+## Install
 
-1. Close Spotify completely.
-2. Open `%APPDATA%\Spotify`.
-3. Remove the custom `chrome_elf.dll`, `blockthespot.dll`, and `config.ini`.
-4. If Spotify restored its stock `chrome_elf.dll`, rename it to `chrome_elf_required.dll`.
-5. Download the latest release assets again.
-6. Copy `chrome_elf.dll`, `blockthespot.dll`, and `config.ini` into `%APPDATA%\Spotify`.
-7. Start Spotify.
+Open **PowerShell** and run:
 
-## Uninstall
+```powershell
+iwr -useb https://raw.githubusercontent.com/thomas-quant/BlockTheSpot-Resilient/master/install.ps1 | iex
+```
 
-1. Close Spotify.
-2. Remove `chrome_elf.dll`, `blockthespot.dll`, and `config.ini` from `%APPDATA%\Spotify`.
-3. Rename `chrome_elf_required.dll` back to `chrome_elf.dll`.
-4. Start Spotify again, or reinstall Spotify if you want a completely clean state.
+It's a short, readable script — [read it first](install.ps1) if you like (you should, for anything that patches an app). It stops Spotify, backs up the original `chrome_elf.dll`, drops in the latest release files, and relaunches.
 
-## Experimental developer features
+> **Uninstall** anytime:
+> ```powershell
+> iwr -useb https://raw.githubusercontent.com/thomas-quant/BlockTheSpot-Resilient/master/uninstall.ps1 | iex
+> ```
 
-1. Open Spotify.
-2. Click the two dots in the top-left corner.
-3. Go to `Develop > Show debug window`.
-4. Toggle experimental options there as needed.
+<details>
+<summary><b>Manual install</b> (if you'd rather not run a script)</summary>
 
-## Defender warning
+1. Go to `%AppData%\Spotify`.
+2. Rename `chrome_elf.dll` → `chrome_elf_required.dll`.
+3. Download `chrome_elf.dll`, `blockthespot.dll`, and `config.ini` from the [latest release](https://github.com/thomas-quant/BlockTheSpot-Resilient/releases/latest) into that folder.
+4. Launch Spotify.
+</details>
 
-- Unsigned DLLs can trigger false positives in Windows Defender or other antivirus products.
-- The source is fully available on GitHub for inspection.
-- If you do not trust prebuilt binaries, build from source and compare the outputs yourself.
+## How it works
 
-## Support
+Two DLLs, a decoy-and-payload design:
 
-- Discord: https://discord.gg/eYudMwgYtY
+- **`chrome_elf.dll` (decoy)** replaces Spotify's real one. It re-exports every function Spotify imports and forwards each to the genuine DLL (renamed `chrome_elf_required.dll`), so nothing breaks — then loads the payload.
+- **`blockthespot.dll` (payload)** hooks Chromium's networking to block ad requests, patches the ad banner out of the UI, and — cleanly — **redirects Spotify's own signature check** at the original signed DLL rather than stripping signatures.
+
+Ad blocking runs in two independent layers so a Spotify update can't take out both at once:
+
+1. **URL blocklist** — drops ad *fetches* (`/ads/`, `/ad-logic/`, hpto, …). Needs no per-version tuning.
+2. **UI patch** — removes the leaderboard ad banner above the playback bar. Anchored on stable tokens with wildcards; if it ever goes stale it no-ops (banner returns, **no crash**) and the [watcher](.github/workflows/spotify-watch.yml) opens an issue.
+
+## Credits
+
+Built on the excellent work of [**mrpond/BlockTheSpot**](https://github.com/mrpond/BlockTheSpot) (original, archived) and [**Nuzair46/BlockTheSpot**](https://github.com/Nuzair46/BlockTheSpot) (continuation). The injection core is theirs; this fork adds update-resilience, the crash guard, a current ad patch, and the auto-build watcher.
+
+## Disclaimer
+
+For educational use. Modifying the Spotify client may violate Spotify's Terms of Service. Consider [Spotify Premium](https://www.spotify.com/premium/) — it's the only way to support artists. Use at your own risk.
