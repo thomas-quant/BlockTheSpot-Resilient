@@ -103,7 +103,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.spot.outputs.version }}-auto.${{ github.run_number }}
-          name: BlockTheSpot ${{ steps.spot.outputs.version }}${{ steps.verify.outputs.ok == 'true' && '' || ' (patch needs attention)' }}
+          name: BlockTheSpot ${{ steps.spot.outputs.version }}${{ steps.verify.outputs.ok != 'true' && ' (patch needs attention)' || '' }}
           prerelease: ${{ steps.verify.outputs.ok != 'true' }}
           body_path: ${{ runner.temp }}/verify.txt
           files: |
