@@ -5,7 +5,6 @@
 #include "log_thread.h"
 #include "pattern.h"
 #include "IAT_hook.h"
-#include "css_cosmetic.h"
 
 static inline size_t cef_buffer_modify_count = 0;
 static inline char cef_buffer_list[MAX_CEF_BUFFER_MODIFY_LIST][MAX_URL_LEN] = {};
@@ -233,8 +232,12 @@ int CALLBACK cef_zip_reader_read_file_hook(void* self, void* buffer, size_t buff
 	std::wstring file_name = Utils::ToString(self->get_file_name(self)->str);
 #else
 	using get_file_name_t = void* (__stdcall*)(void*);
-	const auto get_file_name = get_funct_t<get_file_name_t>(
+	const auto get_file_name = get_funct_guarded<get_file_name_t>(
 		self, CEF_ZIP_READER_GET_FILE_NAME_OFFSET);
+	if (nullptr == get_file_name) {
+		// Bad offset for this build; skip patching this read rather than crash.
+		return _retval;
+	}
 	const wchar_t* file_name = *reinterpret_cast<wchar_t**>(get_file_name(self));
 #endif
 
@@ -262,7 +265,6 @@ int CALLBACK cef_zip_reader_read_file_hook(void* self, void* buffer, size_t buff
 	if (true == do_patch) {
 		patch_file(ansi_file_name, buffer, bufferSize);
 	}
-	css_hide_vbar(ansi_file_name, buffer, bufferSize);
 
 	return _retval;
 }
@@ -284,8 +286,13 @@ void* cef_zip_reader_create_hook(void* stream)
 #else
 	auto zip_reader = cef_zip_reader_create_orig(stream);
 	cef_zip_reader_read_file_orig =
-		get_funct_t<cef_zip_reader_read_file_t>(
+		get_funct_guarded<cef_zip_reader_read_file_t>(
 			zip_reader, CEF_ZIP_READER_GET_READ_FILE_OFFSET);
+	if (nullptr == cef_zip_reader_read_file_orig) {
+		// Bad offset for this build; return the reader unhooked rather than
+		// overwrite a slot that isn't the real read_file pointer.
+		return zip_reader;
+	}
 	overwrite_funct_t<cef_zip_reader_read_file_t>(
 		zip_reader, CEF_ZIP_READER_GET_READ_FILE_OFFSET, cef_zip_reader_read_file_hook);
 #endif

@@ -42,8 +42,14 @@ static inline void* cef_urlrequest_create_hook(void* request, void* client, void
 	const wchar_t* url = url_utf16->str;
 #else
 	using cef_request_get_url_t = void* (__stdcall*)(void*);
-	cef_request_get_url_t get_url = get_funct_t<cef_request_get_url_t>(
+	cef_request_get_url_t get_url = get_funct_guarded<cef_request_get_url_t>(
 		request, CEF_REQUEST_GET_URL_OFFSET);
+
+	if (nullptr == get_url) {
+		// Offset didn't resolve to a valid libcef function for this Spotify
+		// build; don't risk a crash — let the request through unblocked.
+		return cef_urlrequest_create_orig(request, client, request_context);
+	}
 
 	const auto url_utf16 = get_url(request);
 	const wchar_t* url = *reinterpret_cast<wchar_t**>(url_utf16);

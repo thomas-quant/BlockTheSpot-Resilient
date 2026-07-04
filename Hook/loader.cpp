@@ -1,13 +1,12 @@
 #include "pch.h"
 #include "loader.h"
-#include "developer_mode.h"
 #include "IAT_hook.h"
 #include "kill_crashpad.h"
 #include "log_thread.h"
 #include "cef_url_hook.h"
 #include "cef_zip_reader_hook.h"
 #include "libcef_hook.h"
-#include "css_cosmetic.h"
+#include "cef_offsets.h"
 #pragma	comment(lib, "version.lib")
 
 bool remove_debug_log() noexcept
@@ -95,7 +94,7 @@ VOID CALLBACK bts_main(ULONG_PTR param)
 			LoadLibraryW(L"libcef.dll");
 
 		if (!spotify_dll_handle) {
-			log_debug("Failed to load spotify.dll for developer mode hooking.");
+			log_debug("Failed to load spotify.dll for IAT hooking.");
 			return;
 		}
 		if (!libcef_dll_handle) {
@@ -103,11 +102,10 @@ VOID CALLBACK bts_main(ULONG_PTR param)
 			return;
 		}
 
-		hook_developer_mode(spotify_dll_handle);
 		libcef_IAT_hook_GetProcAddress(spotify_dll_handle);
+		resolve_cef_offsets(libcef_dll_handle);
 		hook_cef_url(libcef_dll_handle);
 		hook_cef_reader(libcef_dll_handle);	// not finished yet.
-		modify_css_init();
 		// FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
 		log_info("Loader initialized successfully.");
 	}
