@@ -155,6 +155,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="framework.h" />
+    <ClInclude Include="loader.h" />
+    <ClInclude Include="..\Shared\module_paths.h" />
     <ClInclude Include="pch.h" />
   </ItemGroup>
   <ItemGroup>

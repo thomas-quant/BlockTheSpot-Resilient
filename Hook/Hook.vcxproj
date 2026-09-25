@@ -184,6 +184,8 @@
     <ClInclude Include="funct_pointer.h" />
     <ClInclude Include="IAT_hook.h" />
     <ClInclude Include="import_hook.h" />
+    <ClInclude Include="config.h" />
+    <ClInclude Include="..\Shared\module_paths.h" />
     <ClInclude Include="kill_crashpad.h" />
     <ClInclude Include="libcef_hook.h" />
     <ClInclude Include="loader.h" />

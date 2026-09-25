@@ -1,59 +1,39 @@
 IFDEF RAX ; # 64-bit
 
-    PUSH_ALL MACRO
-        push rax
-        push rbx
-        push rcx
-        push rdx
-        push rbp
-        push rsp
-        push rsi
-        push rdi
-        push r8
-        push r9
-        push r10
-        push r11
-        push r12
-        push r13
-        push r14
-        push r15
-    ENDM
-
-    POP_ALL MACRO
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop r11
-        pop r10
-        pop r9
-        pop r8
-        pop rdi
-        pop rsi
-        pop rsp
-        pop rbp
-        pop rdx
-        pop rcx
-        pop rbx
-        pop rax
-    ENDM
-
     EXTERNDEF LoadAPI:PROC
 
     API_EXPORT_ORIG MACRO API_NAME:REQ
-        .DATA
-            _&API_NAME QWORD 0
+        .CONST
             S_&API_NAME DB '&API_NAME', 0
         .CODE
-        &API_NAME PROC
-            PUSH_ALL
-            sub rsp, 8
+        &API_NAME PROC FRAME
+            ; Windows x64: 32-byte shadow space, four GP arguments, four XMM
+            ; arguments, and 8-byte alignment padding. Stack arguments remain
+            ; untouched when we restore RSP and tail-call the real export.
+            sub rsp, 88h
+            .ALLOCSTACK 88h
+            .ENDPROLOG
+            mov [rsp+20h], rcx
+            mov [rsp+28h], rdx
+            mov [rsp+30h], r8
+            mov [rsp+38h], r9
+            movdqu [rsp+40h], xmm0
+            movdqu [rsp+50h], xmm1
+            movdqu [rsp+60h], xmm2
+            movdqu [rsp+70h], xmm3
             mov rcx, OFFSET S_&API_NAME
             call LoadAPI
-            mov _&API_NAME, rax
-            add rsp, 8
-            POP_ALL
-            jmp QWORD PTR [_&API_NAME]
+            mov r11, rax
+            mov rcx, [rsp+20h]
+            mov rdx, [rsp+28h]
+            mov r8, [rsp+30h]
+            mov r9, [rsp+38h]
+            movdqu xmm0, [rsp+40h]
+            movdqu xmm1, [rsp+50h]
+            movdqu xmm2, [rsp+60h]
+            movdqu xmm3, [rsp+70h]
+            add rsp, 88h
+            jmp r11
         &API_NAME ENDP
     ENDM
 

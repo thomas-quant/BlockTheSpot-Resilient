@@ -63,17 +63,17 @@ bool hook_cef_url(HMODULE libcef) noexcept
         log_info("CEF URL exports missing; interception disabled.");
         return false;
     }
-    if (!GetPrivateProfileIntA("URL_block", "Enable", 0, CONFIG_FILEA)) {
+    if (!config_int("URL_block", "Enable", 0, CONFIG_FILEW)) {
         log_info("URL blocking disabled by config.");
         return true;
     }
-    CEF_REQUEST_GET_URL_OFFSET = GetPrivateProfileIntA("LIBCEF", "CEF_REQUEST_GET_URL_OFFSET",
-        static_cast<INT>(CEF_REQUEST_GET_URL_OFFSET), CONFIG_FILEA);
+    CEF_REQUEST_GET_URL_OFFSET = config_int("LIBCEF", "CEF_REQUEST_GET_URL_OFFSET",
+        static_cast<INT>(CEF_REQUEST_GET_URL_OFFSET), CONFIG_FILEW);
     cef_block_count = 0;
     for (size_t i = 0; i < MAX_CEF_BLOCK_LIST; ++i) {
         char key[16];
         _snprintf_s(key, sizeof(key), _TRUNCATE, "%zu", i + 1);
-        if (!GetPrivateProfileStringA("URL_block", key, "", cef_block_list[i], MAX_URL_LEN, CONFIG_FILEA)) break;
+        if (!config_string("URL_block", key, "", cef_block_list[i], MAX_URL_LEN, CONFIG_FILEW)) break;
         ++cef_block_count;
     }
     cef_urlrequest_create_impl = cef_urlrequest_create_hook;

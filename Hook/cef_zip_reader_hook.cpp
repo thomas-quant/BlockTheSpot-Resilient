@@ -26,16 +26,19 @@ static bool do_patch_buffer(const char* patch_name, void* buffer, size_t length)
     for (size_t i = 0; i < 2; ++i) {
         auto& patch = patches[i];
         _snprintf_s(key, sizeof(key), _TRUNCATE, "Signature_%zu", i + 1);
-        const auto n = GetPrivateProfileStringA(patch_name, key, "", text, sizeof(text), CONFIG_FILEA);
-        if (!n) break;
+        const auto n = config_string(patch_name, key, "", text, sizeof(text), CONFIG_FILEW);
+        if (!n) {
+            if (GetLastError() != ERROR_SUCCESS) return false;
+            break;
+        }
         if (n == sizeof(text) - 1) return false;
         const auto size = parse_signaure(text, n, patch.signature, patch.mask, sizeof(patch.mask) - 1);
         if (!size || size == SIZE_MAX) return false;
         patch.mask[size] = '\0';
         _snprintf_s(key, sizeof(key), _TRUNCATE, "Offset_%zu", i + 1);
-        patch.offset = GetPrivateProfileIntA(patch_name, key, 0, CONFIG_FILEA);
+        patch.offset = config_int(patch_name, key, 0, CONFIG_FILEW);
         _snprintf_s(key, sizeof(key), _TRUNCATE, "Value_%zu", i + 1);
-        const auto value_len = GetPrivateProfileStringA(patch_name, key, "", text, sizeof(text), CONFIG_FILEA);
+        const auto value_len = config_string(patch_name, key, "", text, sizeof(text), CONFIG_FILEW);
         if (!value_len || value_len == sizeof(text) - 1) return false;
         patch.patch_size = parse_hex(text, value_len, patch.value, sizeof(patch.value));
         if (!patch.patch_size || patch.patch_size == SIZE_MAX) return false;
@@ -50,7 +53,7 @@ static void patch_file(const char* file, void* buffer, size_t length) noexcept
         char key[16];
         char patch[MAX_URL_LEN];
         _snprintf_s(key, sizeof(key), _TRUNCATE, "%zu", i + 1);
-        if (!GetPrivateProfileStringA(file, key, "", patch, sizeof(patch), CONFIG_FILEA)) break;
+        if (!config_string(file, key, "", patch, sizeof(patch), CONFIG_FILEW)) break;
         const bool ok = do_patch_buffer(patch, buffer, length);
         char message[256];
         _snprintf_s(message, sizeof(message), _TRUNCATE, "SPA patch %s: %s / %s",
@@ -121,19 +124,19 @@ bool hook_cef_reader(HMODULE libcef) noexcept
         log_info("CEF ZIP exports missing; interception disabled.");
         return false;
     }
-    if (!GetPrivateProfileIntA("Buffer_modify", "Enable", 0, CONFIG_FILEA)) {
+    if (!config_int("Buffer_modify", "Enable", 0, CONFIG_FILEW)) {
         log_info("SPA patching disabled by config.");
         return true;
     }
-    CEF_ZIP_READER_GET_READ_FILE_OFFSET = GetPrivateProfileIntA("LIBCEF", "CEF_ZIP_READER_GET_READ_FILE_OFFSET",
-        static_cast<INT>(CEF_ZIP_READER_GET_READ_FILE_OFFSET), CONFIG_FILEA);
-    CEF_ZIP_READER_GET_FILE_NAME_OFFSET = GetPrivateProfileIntA("LIBCEF", "CEF_ZIP_READER_GET_FILE_NAME_OFFSET",
-        static_cast<INT>(CEF_ZIP_READER_GET_FILE_NAME_OFFSET), CONFIG_FILEA);
+    CEF_ZIP_READER_GET_READ_FILE_OFFSET = config_int("LIBCEF", "CEF_ZIP_READER_GET_READ_FILE_OFFSET",
+        static_cast<INT>(CEF_ZIP_READER_GET_READ_FILE_OFFSET), CONFIG_FILEW);
+    CEF_ZIP_READER_GET_FILE_NAME_OFFSET = config_int("LIBCEF", "CEF_ZIP_READER_GET_FILE_NAME_OFFSET",
+        static_cast<INT>(CEF_ZIP_READER_GET_FILE_NAME_OFFSET), CONFIG_FILEW);
     cef_buffer_modify_count = 0;
     for (size_t i = 0; i < MAX_CEF_BUFFER_MODIFY_LIST; ++i) {
         char key[16];
         _snprintf_s(key, sizeof(key), _TRUNCATE, "%zu", i + 1);
-        if (!GetPrivateProfileStringA("Buffer_modify", key, "", cef_buffer_list[i], MAX_URL_LEN, CONFIG_FILEA)) break;
+        if (!config_string("Buffer_modify", key, "", cef_buffer_list[i], MAX_URL_LEN, CONFIG_FILEW)) break;
         ++cef_buffer_modify_count;
     }
     create_impl = create_reader_hook;

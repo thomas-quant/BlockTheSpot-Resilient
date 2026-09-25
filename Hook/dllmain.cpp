@@ -10,6 +10,13 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 {
 	if (DLL_PROCESS_ATTACH == ul_reason_for_call) {
 		DisableThreadLibraryCalls(hModule);
+		if (!initialize_hook_paths(hModule)) return FALSE;
+		// Import slots and the logger can outlive arbitrary FreeLibrary calls.
+		// Keep the payload mapped until process exit; never wait for a worker
+		// thread from DLL_PROCESS_DETACH while holding Windows' loader lock.
+		HMODULE pinned = nullptr;
+		if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+			reinterpret_cast<LPCWSTR>(hModule), &pinned)) return FALSE;
 		LPWSTR cmd = GetCommandLineW();
 #ifdef USE_APC
 		QueueUserAPC(
@@ -27,16 +34,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 			}
 		}
 	}
-	// At process termination Windows has already stopped other threads. Waiting
-	// for the logger under the loader lock can deadlock; let the OS close handles.
-	if (DLL_PROCESS_DETACH == ul_reason_for_call && lpReserved == nullptr) {
-		LPWSTR cmd = GetCommandLineW();
-		if (NULL == wcsstr(cmd, L"--type=") &&
-			NULL == wcsstr(cmd, L"--url=")) {
-			stop_log();
-			//remove_debug_log();
-		}
-	}
+	// Process exit owns final thread/handle cleanup for this pinned DLL.
 	return TRUE;
 }
 

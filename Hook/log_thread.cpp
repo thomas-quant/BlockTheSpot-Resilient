@@ -189,11 +189,11 @@ static inline void log_info_impl(const char* message) noexcept
 
 void init_log_thread() noexcept
 {
-	logger.log_level = static_cast<Log_level>(GetPrivateProfileIntA(
+	logger.log_level = static_cast<Log_level>(config_int(
 		"Log",
 		"Level",
 		static_cast<int>(Log_level::NONE),
-		CONFIG_FILEA
+		CONFIG_FILEW
 	));
 
 	if (Log_level::NONE == logger.log_level) {

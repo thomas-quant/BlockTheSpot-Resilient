@@ -9,28 +9,6 @@
 #include "cef_offsets.h"
 #pragma	comment(lib, "version.lib")
 
-bool remove_debug_log() noexcept
-{
-	wchar_t old_dpapi[MAX_PATH];
-	DWORD len = GetCurrentDirectoryW(MAX_PATH, old_dpapi);
-	if (len > 0 && len < MAX_PATH) {
-		wcscat_s(old_dpapi, L"\\debug.log");
-		return DeleteFileW(old_dpapi);
-	}
-	return false;
-}
-
-static inline bool remove_unused_dll() noexcept
-{
-	wchar_t old_dpapi[MAX_PATH];
-	DWORD len = GetCurrentDirectoryW(MAX_PATH, old_dpapi);
-	if (len > 0 && len < MAX_PATH) {
-		wcscat_s(old_dpapi, L"\\dpapi.dll");
-		return DeleteFileW(old_dpapi);
-	}
-	return false;
-}
-
 static inline bool is_chrome_elf_required_exist() noexcept
 {
 	const auto required = CreateFileW(
@@ -55,20 +33,17 @@ VOID CALLBACK bts_main(ULONG_PTR param)
 	const wchar_t* cmd =
 		reinterpret_cast<const wchar_t*>(param);
 	//  Spotify's main process
-	if (NULL == wcsstr(cmd, L"--type=") &&
+	if (cmd && NULL == wcsstr(cmd, L"--type=") &&
 		NULL == wcsstr(cmd, L"--url=")) {
 		init_log_thread();
 		if (false == is_chrome_elf_required_exist()) {
 			log_info("chrome_elf_required.dll file not found, Did you skip something?");
 			return;
 		}
-		if (true == remove_unused_dll()) {
-			log_debug("Remove unused dpapi.dll.");
-		}
 		HMODULE spotify_dll_handle =
-			LoadLibraryW(L"spotify.dll");
+			bts::load_beside_module(hook_module, L"spotify.dll");
 		HMODULE libcef_dll_handle =
-			LoadLibraryW(L"libcef.dll");
+			bts::load_beside_module(hook_module, L"libcef.dll");
 
 		if (!spotify_dll_handle) {
 			log_debug("Failed to load spotify.dll for IAT hooking.");

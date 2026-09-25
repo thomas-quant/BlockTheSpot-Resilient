@@ -1,28 +1,32 @@
 #include "pch.h"
+#include "loader.h"
 
-constexpr auto ORIGINAL_CHROME_ELF_DLL = L"./chrome_elf_required.dll";
+static INIT_ONCE original_once = INIT_ONCE_STATIC_INIT;
+static HMODULE original_chrome = nullptr;
 
-extern "C"
-LPVOID WINAPI LoadAPI(const char* api_name)
+static BOOL CALLBACK initialize_original(PINIT_ONCE, PVOID, PVOID*) noexcept
 {
-    static const std::wstring path{ ORIGINAL_CHROME_ELF_DLL };
-    static std::unordered_map<std::string, FARPROC> function_map;
+    original_chrome = bts::load_beside_module(loader_module, L"chrome_elf_required.dll");
+    return original_chrome != nullptr;
+}
 
-    static HMODULE hModule = GetModuleHandleW(path.c_str());
-    if (!hModule) {
-        hModule = LoadLibraryW(path.c_str());
-        if (!hModule) {
-            return nullptr;
-        }
+bool load_original_chrome() noexcept
+{
+    return InitOnceExecuteOnce(&original_once, initialize_original, nullptr, nullptr) != FALSE;
+}
+
+extern "C" LPVOID WINAPI LoadAPI(const char* name)
+{
+    // GetProcAddress is already thread-safe; a mutable unordered_map here added
+    // races and heap allocation to every forwarded call without needing either.
+    if (load_original_chrome()) {
+        if (const auto function = GetProcAddress(original_chrome, name))
+            return reinterpret_cast<LPVOID>(function);
     }
-
-    if (function_map.find(api_name) == function_map.end()) {
-        FARPROC proc = GetProcAddress(hModule, api_name);
-        if (!proc) {
-            return nullptr;
-        }
-        function_map[api_name] = proc;
-    }
-
-    return reinterpret_cast<LPVOID>(function_map[api_name]);
+    // A missing mandatory export has no ABI-safe generic return value. Report a
+    // loader mismatch explicitly instead of jumping through a null pointer.
+    OutputDebugStringA("BlockTheSpot: required chrome_elf export missing; repair/reinstall Spotify.\n");
+    RaiseFailFastException(nullptr, nullptr, 0);
+    TerminateProcess(GetCurrentProcess(), ERROR_PROC_NOT_FOUND);
+    return nullptr; // unreachable unless Windows' termination APIs fail
 }

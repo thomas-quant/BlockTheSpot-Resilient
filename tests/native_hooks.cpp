@@ -15,7 +15,6 @@
 
 static int checks = 0;
 #define CHECK(expr) do { ++checks; if (!(expr)) { std::fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #expr); std::exit(1); } } while (0)
-LONG WINAPI WinVerifyTrust_hook(HWND, GUID*, LPVOID) { return 0; }
 void* cef_urlrequest_create_stub(void*, void*, void*) { return reinterpret_cast<void*>(42); }
 void* cef_zip_reader_create_stub(void*) { return reinterpret_cast<void*>(43); }
 static INT_PTR WINAPI replacement() { return 77; }
@@ -178,8 +177,72 @@ static void guard_tests()
     CHECK(!get_funct_guarded<FARPROC>(&object, sizeof(size_t))); // unknown module fails closed
 }
 
+static WINTRUST_DATA* expected_trust_data = nullptr;
+static bool expect_redirect = false;
+static LONG WINAPI capture_trust(HWND, GUID*, LPVOID opaque)
+{
+    auto data = static_cast<WINTRUST_DATA*>(opaque);
+    CHECK((data != expected_trust_data) == expect_redirect);
+    if (expect_redirect) {
+        CHECK(!wcscmp(data->pFile->pcwszFilePath, ORIGINAL_CHROME_ELF_DLL));
+        CHECK(!data->pFile->hFile);
+        data->hWVTStateData = reinterpret_cast<HANDLE>(42);
+    }
+    return 123;
+}
+
+static void path_and_trust_tests()
+{
+    CHECK(initialize_hook_paths(GetModuleHandleW(nullptr)));
+    wchar_t proxy[bts::path_capacity], too_small[2], old_directory[bts::path_capacity], temp[bts::path_capacity];
+    CHECK(bts::path_beside_module(hook_module, L"chrome_elf.dll", proxy));
+    CHECK(!bts::path_beside_module(hook_module, L"config.ini", too_small));
+    CHECK(!too_small[0]);
+    CHECK(!bts::path_beside_module(hook_module, L"../outside", temp));
+    CHECK(GetCurrentDirectoryW(bts::path_capacity, old_directory));
+    CHECK(GetTempPathW(bts::path_capacity, temp)); CHECK(SetCurrentDirectoryW(temp));
+    CHECK(WritePrivateProfileStringW(L"URL_block", L"Enable", L"1", CONFIG_FILEW));
+    CHECK(WritePrivateProfileStringW(L"patch", L"Signature_1", L"41 42", CONFIG_FILEW));
+    CHECK(config_int("URL_block", "Enable", 0, CONFIG_FILEW) == 1);
+    char text[16];
+    CHECK(config_string("patch", "Signature_1", "", text, sizeof(text), CONFIG_FILEW) == 5);
+    CHECK(!strcmp(text, "41 42"));
+    char tiny[2];
+    CHECK(!config_string("patch", "Signature_1", "", tiny, sizeof(tiny), CONFIG_FILEW));
+    CHECK(GetLastError() == ERROR_INSUFFICIENT_BUFFER && !tiny[0]);
+    CHECK(!config_string("patch", "Signature_2", "", text, sizeof(text), CONFIG_FILEW));
+    CHECK(GetLastError() == ERROR_SUCCESS);
+    CHECK(config_int("URL_block", "Enable", 7, L"") == 7);
+
+    HANDLE backup = CreateFileW(ORIGINAL_CHROME_ELF_DLL, GENERIC_WRITE, 0, nullptr, CREATE_NEW, 0, nullptr);
+    CHECK(backup != INVALID_HANDLE_VALUE); CloseHandle(backup);
+    HANDLE file = CreateFileW(proxy, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, 0, nullptr);
+    CHECK(file != INVALID_HANDLE_VALUE);
+    WINTRUST_FILE_INFO info{}; info.cbStruct = sizeof(info); info.pcwszFilePath = proxy;
+    WINTRUST_DATA data{}; data.cbStruct = sizeof(data); data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.dwStateAction = WTD_STATEACTION_VERIFY; data.pFile = &info;
+    expected_trust_data = &data; expect_redirect = true;
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    CHECK(data.pFile == &info && info.pcwszFilePath == proxy && !info.hFile);
+    CHECK(data.hWVTStateData == reinterpret_cast<HANDLE>(42));
+    info.hFile = file; info.pcwszFilePath = nullptr; // handle-only verification
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    expect_redirect = false; data.dwStateAction = WTD_STATEACTION_CLOSE;
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    info.hFile = nullptr; info.pcwszFilePath = L"C:\\unrelated\\chrome_elf.dll";
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    data.dwUnionChoice = WTD_CHOICE_CATALOG; data.pCatalog = nullptr;
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    expected_trust_data = nullptr;
+    CHECK(verify_spotify_file(nullptr, nullptr, nullptr, capture_trust) == 123);
+    CloseHandle(file);
+    CHECK(DeleteFileW(proxy)); CHECK(DeleteFileW(ORIGINAL_CHROME_ELF_DLL)); CHECK(DeleteFileW(CONFIG_FILEW));
+    CHECK(SetCurrentDirectoryW(old_directory));
+}
+
 int main()
 {
-    import_tests(); pattern_tests(); guard_tests();
-    std::printf("PASS: %d native checks (imports, dispatch, guards, transactional patches).\n", checks);
+    import_tests(); pattern_tests(); guard_tests(); path_and_trust_tests();
+    std::printf("PASS: %d native checks (imports, guards, patches, Unicode paths, trust redirection).\n", checks);
 }
