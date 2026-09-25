@@ -227,7 +227,14 @@ static void path_and_trust_tests()
     CHECK(data.hWVTStateData == reinterpret_cast<HANDLE>(42));
     info.hFile = file; info.pcwszFilePath = nullptr; // handle-only verification
     CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
-    expect_redirect = false; data.dwStateAction = WTD_STATEACTION_CLOSE;
+    expect_redirect = false;
+    data.cbStruct = sizeof(data) + 8;
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    data.cbStruct = sizeof(data); info.cbStruct = sizeof(info) + 8;
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    info.cbStruct = 0;
+    CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
+    info.cbStruct = sizeof(info); data.dwStateAction = WTD_STATEACTION_CLOSE;
     CHECK(verify_spotify_file(nullptr, nullptr, &data, capture_trust) == 123);
     data.dwStateAction = WTD_STATEACTION_VERIFY;
     info.hFile = nullptr; info.pcwszFilePath = L"C:\\unrelated\\chrome_elf.dll";

@@ -4,9 +4,11 @@
 LONG verify_spotify_file(HWND window, GUID* action, LPVOID opaque, WinVerifyTrust_t verify)
 {
     auto data = static_cast<WINTRUST_DATA*>(opaque);
-    if (!data || data->cbStruct < sizeof(WINTRUST_DATA) || data->dwUnionChoice != WTD_CHOICE_FILE ||
+    // Do not copy an unknown larger layout into a smaller stack object while
+    // retaining its larger cbStruct: the provider could read beyond that copy.
+    if (!data || data->cbStruct != sizeof(WINTRUST_DATA) || data->dwUnionChoice != WTD_CHOICE_FILE ||
         data->dwStateAction == WTD_STATEACTION_CLOSE || !data->pFile ||
-        data->pFile->cbStruct < sizeof(WINTRUST_FILE_INFO)) return verify(window, action, opaque);
+        data->pFile->cbStruct != sizeof(WINTRUST_FILE_INFO)) return verify(window, action, opaque);
 
     const auto source = data->pFile;
     wchar_t path[bts::path_capacity], proxy[bts::path_capacity];
