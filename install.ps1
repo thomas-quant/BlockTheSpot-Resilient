@@ -73,6 +73,8 @@ function Install-BlockTheSpot {
     $stage = Join-Path $SpotifyDirectory ('.blockthespot-stage-' + [guid]::NewGuid().ToString('N'))
     $keepStage = $false
     $committed = $false
+    $dirty = $false
+    $rolledBack = $false
     try {
         $incoming = New-Item -ItemType Directory -Path (Join-Path $stage 'incoming') -Force
         $previous = New-Item -ItemType Directory -Path (Join-Path $stage 'previous') -Force
@@ -123,6 +125,7 @@ function Install-BlockTheSpot {
         $existed | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'prior-state.json') -Encoding UTF8
         $attempted = New-Object 'Collections.Generic.List[string]'
         try {
+            $dirty = $true
             foreach ($name in $order) {
                 $attempted.Add($name)
                 Set-BtsFile (Join-Path $incoming.FullName $name) (Join-Path $SpotifyDirectory $name)
@@ -146,10 +149,15 @@ function Install-BlockTheSpot {
                 $keepStage = $true
                 throw "Install failed ($failure); rollback incomplete for $($failedRestore -join ', '). Recovery snapshots: $stage. Do not launch Spotify until restored."
             }
+            $rolledBack = $true
             throw "Install failed; previous files restored: $failure"
         }
     } finally {
-        if (-not $keepStage -and (Test-Path -LiteralPath $stage)) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+        # Ctrl+C/runspace cancellation can execute finally without completing
+        # catch. Never discard the only recovery copy for an unfinished commit.
+        if (-not $keepStage -and (-not $dirty -or $committed -or $rolledBack) -and (Test-Path -LiteralPath $stage)) {
+            Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+        }
         $lock.Dispose()
     }
     if ($committed) {

@@ -162,5 +162,39 @@ try {
     Uninstall-BlockTheSpot $script:Spotify
     Assert-Bts (Is-FixtureOriginal (Join-Path $script:Spotify 'chrome_elf.dll')) 'Uninstall did not restore genuine DLL'
     Assert-Bts (Test-Path -LiteralPath (Join-Path $script:Spotify 'config.ini.previous')) 'Uninstall discarded preserved settings'
+    # Exit a child script DURING commit: bypass catch but execute finally, the
+    # same recovery-retention path needed for interrupted PowerShell pipelines.
+    Reset-Fixture
+    $before = Fingerprint
+    $child = Join-Path $root 'interrupt.ps1'
+    $metadata = Join-Path $root 'release.json'
+    $script:Release | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $metadata -Encoding UTF8
+    @'
+param($directory, $assets, $metadata, $installer)
+$ErrorActionPreference = 'Stop'
+. $installer
+$script:Assets = $assets
+$script:Release = Get-Content -LiteralPath $metadata -Raw | ConvertFrom-Json
+function Get-BtsRelease($repo) { $script:Release }
+function Receive-BtsAsset($url, $path) { Copy-Item (Join-Path $script:Assets ($url.Split('/')[-1])) $path }
+function Test-BtsGenuineDll($path, $directory) {
+    (Test-Path -LiteralPath $path) -and [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($path)).Contains('genuine-current')
+}
+function Stop-BtsSpotify($directory) {}
+$script:SetFile = ${function:Set-BtsFile}
+function Set-BtsFile($source, $destination) {
+    & $script:SetFile $source $destination
+    exit 73
+}
+Install-BlockTheSpot $directory -NoLaunch
+'@ | Set-Content -LiteralPath $child -Encoding UTF8
+    $hostExe = (Get-Process -Id $PID).Path
+    & $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $child $script:Spotify $script:Assets $metadata (Join-Path $PSScriptRoot '../install.ps1')
+    Assert-Bts ($LASTEXITCODE -eq 73) 'Interruption fixture did not reach commit'
+    $recovery = @(Get-ChildItem -LiteralPath $script:Spotify -Directory -Filter '.blockthespot-stage-*')
+    Assert-Bts ((Fingerprint) -ne $before) 'Fixture did not interrupt a partially applied update'
+    Assert-Bts ($recovery.Count -eq 1) 'Interrupted commit erased recovery snapshots'
+    Assert-Bts (Test-Path -LiteralPath (Join-Path $recovery[0].FullName 'previous/chrome_elf.dll')) 'Interruption lost the original DLL snapshot'
+    Assert-Bts (Test-Path -LiteralPath (Join-Path $recovery[0].FullName 'prior-state.json')) 'Interruption lost the recovery journal'
     Write-Output "PASS: $script:Checks installer/uninstaller checks using isolated Unicode-path fixtures."
 } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }

@@ -47,7 +47,7 @@ iwr -useb https://raw.githubusercontent.com/thomas-quant/BlockTheSpot-Resilient/
 
 Uninstall restores and verifies the genuine DLL **before** removing the payload. It leaves the backup and `config.ini.previous` for recovery, and refuses to remove anything if neither the current DLL nor backup is a compatible genuine copy.
 
-**Interrupted installations:** caught replacement errors roll back. If rollback itself fails, the error identifies a `.blockthespot-stage-*` recovery folder containing `previous/` snapshots and `prior-state.json`. Keep it, close Spotify and restore the previous files (or repair the official client) before relaunching. A forced termination or power loss can interrupt a multi-file update; this is not a power-loss-atomic transaction.
+**Interrupted installations:** caught replacement errors roll back. If rollback itself fails, the error identifies a `.blockthespot-stage-*` recovery folder containing `previous/` snapshots and `prior-state.json`. An interrupted script can leave the same recovery folder even without an error message. Keep it, close Spotify and restore the previous files (or repair the official client) before relaunching. A forced termination or power loss can interrupt a multi-file update; this is not a power-loss-atomic transaction.
 
 ## How it works
 
