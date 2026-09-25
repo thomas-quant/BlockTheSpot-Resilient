@@ -5,146 +5,78 @@
 #include "log_thread.h"
 #include "IAT_hook.h"
 
-static inline size_t cef_block_count = 0;
-static inline char cef_block_list[MAX_CEF_BLOCK_LIST][MAX_URL_LEN] = {};
+static size_t cef_block_count = 0;
+static char cef_block_list[MAX_CEF_BLOCK_LIST][MAX_URL_LEN] = {};
+using cef_urlrequest_create_t = void* (*)(void*, void*, void*);
+static cef_urlrequest_create_t cef_urlrequest_create_orig = nullptr;
+static cef_urlrequest_create_t cef_urlrequest_create_impl = nullptr;
+static cef_string_free_t free_string = nullptr;
 
-using cef_urlrequest_create_t = void* (*)(void* request, void* client, void* request_context);
-static inline cef_urlrequest_create_t cef_urlrequest_create_orig = nullptr;
-static inline cef_urlrequest_create_t cef_urlrequest_create_impl = nullptr;
-
-using cef_string_userfree_utf16_free_t = void (*)(void* str);
-static inline cef_string_userfree_utf16_free_t cef_string_userfree_utf16_free_orig = nullptr;
-
-static inline bool is_blocked(const char* in_url) noexcept {
-	for (size_t i = 0; i < cef_block_count; ++i) {
-		const char* block_url = cef_block_list[i];
-
-		if (strstr(in_url, block_url)) {
-			return true;
-		}
-	}
-	return false;
+static bool is_blocked(const char* url) noexcept
+{
+    for (size_t i = 0; i < cef_block_count; ++i)
+        if (strstr(url, cef_block_list[i])) return true;
+    return false;
 }
 
-void* cef_urlrequest_create_stub(void* request, void* client, void* request_context)
+void* cef_urlrequest_create_stub(void* request, void* client, void* context)
 {
-	return cef_urlrequest_create_impl(request, client, request_context);
+    return cef_urlrequest_create_impl ? cef_urlrequest_create_impl(request, client, context) : nullptr;
 }
 
-#ifdef USE_LIBCEF
-static inline void* cef_urlrequest_create_hook(struct _cef_request_t* request, void* client, void* request_context)
-#else
-static inline void* cef_urlrequest_create_hook(void* request, void* client, void* request_context)
-#endif
+static void* cef_urlrequest_create_hook(void* request, void* client, void* context)
 {
-#ifdef USE_LIBCEF
-	cef_string_utf16_t* url_utf16 = request->get_url(request);
-	const wchar_t* url = url_utf16->str;
-#else
-	using cef_request_get_url_t = void* (__stdcall*)(void*);
-	cef_request_get_url_t get_url = get_funct_guarded<cef_request_get_url_t>(
-		request, CEF_REQUEST_GET_URL_OFFSET);
+    static LONG observed = 0;
+    if (!InterlockedExchange(&observed, 1)) log_info("CEF URL callback observed.");
+    using get_url_t = cef_utf16_string* (__stdcall*)(void*);
+    const auto get_url = get_funct_guarded<get_url_t>(request, CEF_REQUEST_GET_URL_OFFSET);
+    if (!get_url) return cef_urlrequest_create_orig(request, client, context);
+    const auto url = get_url(request);
+    if (!url) return cef_urlrequest_create_orig(request, client, context);
 
-	if (nullptr == get_url) {
-		// Offset didn't resolve to a valid libcef function for this Spotify
-		// build; don't risk a crash — let the request through unblocked.
-		return cef_urlrequest_create_orig(request, client, request_context);
-	}
-
-	const auto url_utf16 = get_url(request);
-	const wchar_t* url = *reinterpret_cast<wchar_t**>(url_utf16);
-#endif
-
-	const auto len = WideCharToMultiByte(CP_ACP, 0, url, -1, shared_buffer, SHARED_BUFFER_SIZE, NULL, NULL);
-	cef_string_userfree_utf16_free_orig((void*)url_utf16);
-
-	if (0 == len) {
-		return cef_urlrequest_create_orig(request, client, request_context);
-	}
-
-	const bool blocked = is_blocked(shared_buffer);
-
-	char log_buf[256]{};
-	_snprintf_s(
-		log_buf,
-		sizeof(log_buf),
-		_TRUNCATE,
-		"%s:%s",
-		blocked ? "block" : "allow",
-		shared_buffer
-	);
-	log_debug(log_buf);
-
-	return blocked ? nullptr : cef_urlrequest_create_orig(request, client, request_context);
+    // Per-call storage: URL callbacks can run concurrently with SPA patching.
+    char buffer[SHARED_BUFFER_SIZE]{};
+    int length = 0;
+    if (url->str && url->length && url->length < SHARED_BUFFER_SIZE)
+        length = WideCharToMultiByte(CP_UTF8, 0, url->str, static_cast<int>(url->length),
+            buffer, sizeof(buffer) - 1, nullptr, nullptr);
+    free_string(url);
+    if (!length) return cef_urlrequest_create_orig(request, client, context);
+    buffer[length] = '\0';
+    static LONG active = 0;
+    if (!InterlockedExchange(&active, 1)) log_info("CEF URL handler active (URL decoded).");
+    const bool blocked = is_blocked(buffer);
+    // Detailed URLs are opt-in (Level=2), never part of the default diagnostics.
+    char message[256];
+    _snprintf_s(message, sizeof(message), _TRUNCATE, "%s:%s", blocked ? "block" : "allow", buffer);
+    log_debug(message);
+    return blocked ? nullptr : cef_urlrequest_create_orig(request, client, context);
 }
 
-static inline bool is_cef_url_hook() noexcept
+bool hook_cef_url(HMODULE libcef) noexcept
 {
-	auto is_enable = GetPrivateProfileIntA(
-		"URL_block",
-		"Enable",
-		0,
-		CONFIG_FILEA
-	);
-	return 0 != is_enable;
-}
-
-static inline void do_hook_cef_url(HMODULE libcef_dll_handle) noexcept
-{
-	cef_urlrequest_create_impl = cef_urlrequest_create_hook;
-	log_debug("do_hook_cef_url: cef_urlrequest_create_impl = cef_urlrequest_create_hook.");
-
-	cef_string_userfree_utf16_free_orig = reinterpret_cast<cef_string_userfree_utf16_free_t>(
-		GetProcAddress_orig(
-			libcef_dll_handle,
-			"cef_string_userfree_utf16_free"
-		));
-	log_info("do_hook_cef_url: patch applied.");
-}
-
-static inline void load_cef_url_config()
-{
-	CEF_REQUEST_GET_URL_OFFSET
-		= GetPrivateProfileIntA(
-			"LIBCEF",
-			"CEF_REQUEST_GET_URL_OFFSET",
-			static_cast<INT>(CEF_REQUEST_GET_URL_OFFSET),
-			CONFIG_FILEA
-		);
-
-	for (size_t i = 0; i < MAX_CEF_BLOCK_LIST; ++i) {
-		const size_t display_idx = i + 1;
-		_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "%zu", display_idx);
-		const auto len = GetPrivateProfileStringA(
-			"URL_block",
-			shared_buffer,
-			"",
-			cef_block_list[i],
-			MAX_URL_LEN,
-			CONFIG_FILEA
-		);
-		if (0 == len) {
-			_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "Load block url %zu: fail, stop processing", display_idx);
-			log_debug(shared_buffer);
-			cef_block_count = i;
-			break;
-		}
-		_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "Load block url %zu:%s", display_idx, cef_block_list[i]);
-		log_debug(shared_buffer);
-	}
-	_snprintf_s(shared_buffer, SHARED_BUFFER_SIZE, _TRUNCATE, "%zu block url loaded", cef_block_count);
-	log_info(shared_buffer);
-}
-
-void hook_cef_url(HMODULE libcef_dll_handle) noexcept
-{
-	cef_urlrequest_create_orig =
-		reinterpret_cast<cef_urlrequest_create_t>(
-			GetProcAddress_orig(libcef_dll_handle, "cef_urlrequest_create"));
-	cef_urlrequest_create_impl = cef_urlrequest_create_orig;
-
-	if (true == is_cef_url_hook()) {
-		load_cef_url_config();
-		do_hook_cef_url(libcef_dll_handle);
-	}
+    cef_urlrequest_create_orig = reinterpret_cast<cef_urlrequest_create_t>(
+        GetProcAddress_orig(libcef, "cef_urlrequest_create"));
+    cef_urlrequest_create_impl = cef_urlrequest_create_orig;
+    free_string = reinterpret_cast<cef_string_free_t>(GetProcAddress_orig(libcef, "cef_string_userfree_utf16_free"));
+    if (!cef_urlrequest_create_orig || !free_string) {
+        log_info("CEF URL exports missing; interception disabled.");
+        return false;
+    }
+    if (!GetPrivateProfileIntA("URL_block", "Enable", 0, CONFIG_FILEA)) {
+        log_info("URL blocking disabled by config.");
+        return true;
+    }
+    CEF_REQUEST_GET_URL_OFFSET = GetPrivateProfileIntA("LIBCEF", "CEF_REQUEST_GET_URL_OFFSET",
+        static_cast<INT>(CEF_REQUEST_GET_URL_OFFSET), CONFIG_FILEA);
+    cef_block_count = 0;
+    for (size_t i = 0; i < MAX_CEF_BLOCK_LIST; ++i) {
+        char key[16];
+        _snprintf_s(key, sizeof(key), _TRUNCATE, "%zu", i + 1);
+        if (!GetPrivateProfileStringA("URL_block", key, "", cef_block_list[i], MAX_URL_LEN, CONFIG_FILEA)) break;
+        ++cef_block_count;
+    }
+    cef_urlrequest_create_impl = cef_urlrequest_create_hook;
+    log_info("CEF URL handler ready (imports not yet patched).");
+    return true;
 }

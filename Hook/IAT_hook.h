@@ -1,8 +1,8 @@
 #pragma once
 #include "loader.h"
+#include "import_hook.h"
 
 using GetProcAddress_t = FARPROC(WINAPI*)(HMODULE, LPCSTR);
-inline GetProcAddress_t GetProcAddress_orig = nullptr;
+inline const GetProcAddress_t GetProcAddress_orig = ::GetProcAddress;
 
-bool process_IAT_hook_GetProcAddress(HMODULE module) noexcept;
-//bool IAT_unhook_GetProcAddress() noexcept;
+imports::result process_IAT_hook_GetProcAddress(HMODULE module) noexcept;

@@ -2,72 +2,82 @@
 
 # BlockTheSpot-Resilient
 
-**Block Spotify ads on Windows — without breaking every time Spotify updates.**
+**Spotify ad blocking for Windows, with safer hooks and compatibility checks.**
 
 [![Latest release](https://img.shields.io/github/v/release/thomas-quant/BlockTheSpot-Resilient?label=latest%20build&color=1DB954)](https://github.com/thomas-quant/BlockTheSpot-Resilient/releases/latest)
-[![Stars](https://img.shields.io/github/stars/thomas-quant/BlockTheSpot-Resilient?color=1DB954)](https://github.com/thomas-quant/BlockTheSpot-Resilient/stargazers)
+[![Build and Verify](https://github.com/thomas-quant/BlockTheSpot-Resilient/actions/workflows/ci.yml/badge.svg)](https://github.com/thomas-quant/BlockTheSpot-Resilient/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-blue)
 
 </div>
 
----
+A maintained fork of [BlockTheSpot](https://github.com/mrpond/BlockTheSpot), built on [Nuzair46's continuation](https://github.com/Nuzair46/BlockTheSpot). It patches your existing standalone Spotify client rather than downloading a replacement from a third-party mirror.
 
-A maintained, **update-resilient** take on [BlockTheSpot](https://github.com/mrpond/BlockTheSpot) — the classic Spotify ad blocker whose original repo is now archived and which breaks on nearly every Spotify update. This fork fixes the two things that made the original painful:
+- **More than one interception path.** Hooks CEF's ordinary and delayed imports by name, plus dynamic `GetProcAddress` lookups, including Windows API-set imports used by newer Spotify versions.
+- **Defensive patching.** Checks CEF object sizes, function-pointer ranges and memory protections. JavaScript patches need unique matches and bounded writes; paired edits are validated before either is applied.
+- **Checks that exercise the hooks.** Branch CI and the daily watcher run native regression tests, validate JS patches, then launch the official Spotify client on a disposable Windows runner and require actual URL and ZIP callbacks.
+- **Honest failure reporting.** Failed verification blocks publication and the watcher opens an issue. Startup diagnostics distinguish prepared handlers, installed imports and observed callbacks.
 
-- 🛡️ **It doesn't crash when Spotify updates.** The original hard-codes internal offsets into `config.ini`; when Spotify shifts them, Spotify won't even launch (`0xC0000005`). This version **detects them at runtime** and **guards every access** — a mismatch degrades to "ads not blocked" instead of a dead app.
-- 🤖 **It watches Spotify for you.** A CI job checks daily for new Spotify releases, verifies the patches still match, publishes a fresh build, and **opens an issue if anything went stale** — so you're never silently broken.
-
-## Why this vs. the alternatives
-
-| | **This (Resilient)** | BlockTheSpot (original) | SpotX |
-|---|:---:|:---:|:---:|
-| Survives Spotify updates without crashing | ✅ runtime offset detect + guard | ❌ crashes, needs manual offset edit | ⚠️ re-run each update |
-| Auto-builds + alerts when Spotify updates | ✅ CI watcher | ❌ | ❌ |
-| Blocks audio + banner ads | ✅ | ✅ *(signatures rot)* | ✅ |
-| Patches your **official** Spotify in place | ✅ | ✅ | ⚠️ downloads Spotify from a 3rd-party mirror |
-| Keeps Spotify's code signatures intact | ✅ redirects the check | ✅ | ❌ strips signatures |
-| Auditable install | ✅ ~40-line PowerShell | ⚠️ compiled installer | ⚠️ remote `iwr\|iex` script |
+**Limits:** CEF offsets are known defaults with a version-override mechanism, not automatic ABI discovery. Guards cannot prove that a valid function pointer still identifies the expected method. The logged-out startup smoke test does **not** establish ad-free playback or signed-in UI behavior. No fork can guarantee compatibility with every future Spotify update. See [compatibility and testing](docs/compatibility.md).
 
 ## Install
 
-Open **PowerShell** and run:
+Requires the **standalone Windows x64 client**, not the Microsoft Store version. In PowerShell:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/thomas-quant/BlockTheSpot-Resilient/master/install.ps1 | iex
 ```
 
-It's a short, readable script — [read it first](install.ps1) if you like (you should, for anything that patches an app). It stops Spotify, backs up the original `chrome_elf.dll`, drops in the latest release files, and relaunches.
+[Read the installer first](install.ps1). It stops Spotify, backs up the genuine `chrome_elf.dll`, downloads the latest release files and relaunches the app. A Spotify update can replace the loader; re-run the installer if necessary.
 
-> **Uninstall** anytime:
-> ```powershell
-> iwr -useb https://raw.githubusercontent.com/thomas-quant/BlockTheSpot-Resilient/master/uninstall.ps1 | iex
-> ```
+### Manual install
 
-<details>
-<summary><b>Manual install</b> (if you'd rather not run a script)</summary>
-
-1. Go to `%AppData%\Spotify`.
-2. Rename `chrome_elf.dll` → `chrome_elf_required.dll`.
-3. Download `chrome_elf.dll`, `blockthespot.dll`, and `config.ini` from the [latest release](https://github.com/thomas-quant/BlockTheSpot-Resilient/releases/latest) into that folder.
+1. Close Spotify and open `%AppData%\Spotify`.
+2. Rename the **genuine** `chrome_elf.dll` to `chrome_elf_required.dll`. Do not overwrite a genuine backup with an already-installed BlockTheSpot loader.
+3. Download `chrome_elf.dll`, `blockthespot.dll` and `config.ini` from the [latest release](https://github.com/thomas-quant/BlockTheSpot-Resilient/releases/latest) into that folder.
 4. Launch Spotify.
-</details>
+
+### Uninstall
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/thomas-quant/BlockTheSpot-Resilient/master/uninstall.ps1 | iex
+```
 
 ## How it works
 
-Two DLLs, a decoy-and-payload design:
+- **`chrome_elf.dll` (loader)** forwards Chromium exports to the original signed DLL, renamed `chrome_elf_required.dll`, and loads the payload.
+- **`blockthespot.dll` (payload)** intercepts CEF URL requests and SPA reads. It redirects Spotify's signature check to the original DLL rather than modifying Spotify's signed binaries on disk.
+- **URL rules** block configured ad request paths. The default config also blocks `/desktop-update/`; remove that rule if you want Spotify's update requests to pass through.
+- **SPA patches** hide the leaderboard banner using a length-preserving JavaScript edit.
 
-- **`chrome_elf.dll` (decoy)** replaces Spotify's real one. It re-exports every function Spotify imports and forwards each to the genuine DLL (renamed `chrome_elf_required.dll`), so nothing breaks — then loads the payload.
-- **`blockthespot.dll` (payload)** hooks Chromium's networking to block ad requests, patches the ad banner out of the UI, and — cleanly — **redirects Spotify's own signature check** at the original signed DLL rather than stripping signatures.
+The URL and UI rules are separate, but **both depend on working native interception**. A matching JS signature alone is not proof that ad blocking works.
 
-Ad blocking runs in two independent layers so a Spotify update can't take out both at once:
+## Troubleshooting
 
-1. **URL blocklist** — drops ad *fetches* (`/ads/`, `/ad-logic/`, hpto, …). Needs no per-version tuning.
-2. **UI patch** — removes the leaderboard ad banner above the playback bar. Anchored on stable tokens with wildcards; if it ever goes stale it no-ops (banner returns, **no crash**) and the [watcher](.github/workflows/spotify-watch.yml) opens an issue.
+Information-level logging is enabled by default in `config.ini` (`[Log] Level=1`). Look in `%AppData%\Spotify\blockthespot.log` after launching:
+
+- `CEF hook installation: OK` — the required interception paths were installed, not proof of playback behavior.
+- `CEF URL handler active (URL decoded)` and `CEF ZIP read callback observed (filename decoded)` — actual callbacks executed successfully.
+- `FAILED/PARTIAL` or `SPA patch skipped` — compatibility needs investigation; do not treat a successful launch as a successful ad block.
+
+The log is reset on startup. `Level=0` disables it. `Level=2` includes request URLs: **do not post debug logs publicly without redacting tokens and personal information**. When reporting a problem, include the Spotify version, the release/commit installed, symptoms, and the information-level log.
+
+## Development
+
+Cheap cross-platform checks:
+
+```sh
+python -m unittest discover -s tests -p 'test_*.py' -v
+python tools/verify_patches.py config.ini <extracted-xpui-directory>
+```
+
+Windows builds/tests use `tools/build-and-test.ps1` in an x64 MSVC developer shell. GitHub Actions runs this automatically on branches and uploads DLLs plus verification reports. The installer and smoke-test scripts under `tools/` are restricted to disposable GitHub-hosted runners and must not be used against a personal installation.
 
 ## Credits
 
-Built on the excellent work of [**mrpond/BlockTheSpot**](https://github.com/mrpond/BlockTheSpot) (original, archived) and [**Nuzair46/BlockTheSpot**](https://github.com/Nuzair46/BlockTheSpot) (continuation). The injection core is theirs; this fork adds update-resilience, the crash guard, a current ad patch, and the auto-build watcher.
+- [**mrpond/BlockTheSpot**](https://github.com/mrpond/BlockTheSpot): original project.
+- [**Nuzair46/BlockTheSpot**](https://github.com/Nuzair46/BlockTheSpot): continuation and injection core.
+- [**MichaelMiksa**](https://github.com/MichaelMiksa/BlockTheSpot---continued): identified the hook failure and contributed the by-name CEF delay-import approach adapted here, with co-author credit in the fixing commit. See [issue #1](https://github.com/thomas-quant/BlockTheSpot-Resilient/issues/1) and his [original implementation](https://github.com/MichaelMiksa/BlockTheSpot---continued/commit/7725515).
 
 ## Disclaimer
 
-For educational use. Modifying the Spotify client may violate Spotify's Terms of Service. Consider [Spotify Premium](https://www.spotify.com/premium/) — it's the only way to support artists. Use at your own risk.
+For educational use. Modifying the Spotify client may violate Spotify's Terms of Service. Consider [Spotify Premium](https://www.spotify.com/premium/). Use at your own risk.

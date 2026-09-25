@@ -1,0 +1,75 @@
+name: Build and Verify
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      spotify_version:
+        description: Official Spotify version exercised by the smoke test
+        value: ${{ jobs.windows.outputs.spotify_version }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    outputs:
+      spotify_version: ${{ steps.spotify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build DLLs and run regression tests
+        shell: pwsh
+        run: ./tools/build-and-test.ps1
+      - name: Install official Spotify on disposable runner
+        id: spotify
+        shell: pwsh
+        run: ./tools/install-ci-spotify.ps1
+      - name: Verify all configured JS patches
+        shell: pwsh
+        env:
+          SPA: ${{ steps.spotify.outputs.spa }}
+        run: |
+          New-Item -ItemType Directory -Force reports | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'xpui.zip'
+          $dir = Join-Path $env:RUNNER_TEMP 'xpui'
+          Copy-Item $env:SPA $zip
+          Expand-Archive $zip $dir -Force
+          python tools/verify_patches.py config.ini $dir | Tee-Object reports/verify.txt
+          if ($LASTEXITCODE -ne 0) { throw 'JS patch verification failed' }
+      - name: Exercise native hooks in real Spotify
+        shell: pwsh
+        env:
+          SPOTIFY_DIRECTORY: ${{ steps.spotify.outputs.spotify }}
+        run: ./tools/smoke-test.ps1 -SpotifyDirectory $env:SPOTIFY_DIRECTORY
+      - name: Record verification scope
+        shell: pwsh
+        env:
+          SPOTIFY_VERSION: ${{ steps.spotify.outputs.version }}
+        run: |
+          "Commit: $env:GITHUB_SHA`nSpotify: $env:SPOTIFY_VERSION" | Set-Content reports/build.txt
+          Copy-Item reports/build.txt, reports/verify.txt, reports/smoke.txt dist/
+          Get-Content reports/build.txt, reports/verify.txt, reports/smoke.txt >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlockTheSpot-Resilient-windows-x64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14

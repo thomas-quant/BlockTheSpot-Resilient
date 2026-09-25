@@ -1,89 +1,136 @@
 #!/usr/bin/env python3
-"""Verify that config.ini's Buffer_modify JS signatures still match the current
-Spotify bundles.
+"""Validate the configured SPA patches, not native hook installation or playback.
 
 Usage: verify_patches.py <config.ini> <extracted-xpui-dir>
-
-Parses [Buffer_modify] -> target files -> patch sections, and checks each
-Signature_1 (BlockTheSpot hex with `??` wildcards) still occurs in its target
-file. Exits 0 if every signature matches, 1 otherwise, printing which broke.
-Used by the spotify-watch workflow to detect when a Spotify update has shifted
-the code out from under a patch, so it can alert instead of silently shipping a
-no-op patch.
+Mirrors runtime ordering, unique matches, paired-patch atomicity and write bounds.
+Never modifies the input bundles. Native installation is checked separately by CI.
 """
 import configparser
-import os
+import re
 import sys
+from pathlib import Path
 
 
-def parse_sig(hexstr):
-    out = []
-    for tok in hexstr.split():
-        out.append(None if tok == "??" else int(tok, 16))
-    return out
+def parse_sig(text):
+    tokens = text.split()
+    if not tokens or len(text.encode('utf-8')) >= 1023:
+        raise ValueError('empty or oversized signature')
+    if any(not re.fullmatch(r'[0-9a-fA-F]{2}|\?\?', token) for token in tokens):
+        raise ValueError('invalid signature byte')
+    return [None if token == '??' else int(token, 16) for token in tokens]
 
 
-def find(data, sig):
-    n = len(sig)
-    if n == 0:
-        return -1
-    for i in range(len(data) - n + 1):
-        for j, b in enumerate(sig):
-            if b is not None and data[i + j] != b:
-                break
-        else:
-            return i
-    return -1
+def matches(data, signature):
+    pattern = b''.join(b'.' if byte is None else re.escape(bytes([byte])) for byte in signature)
+    # Lookahead includes overlapping matches. Two are enough to reject ambiguity.
+    found = []
+    for match in re.finditer(b'(?=' + pattern + b')', data, re.DOTALL):
+        found.append(match.start())
+        if len(found) == 2:
+            break
+    return found
+
+
+def find(data, signature):
+    found = matches(data, signature) if signature else []
+    return found[0] if found else -1
+
+
+def numbered(cp, section, maximum):
+    if not cp.has_section(section):
+        raise ValueError(f'missing section [{section}]')
+    entries = {int(k): v for k, v in cp.items(section) if k.isdigit()}
+    if not entries or sorted(entries) != list(range(1, len(entries) + 1)) or len(entries) > maximum:
+        raise ValueError(f'[{section}] needs consecutive entries 1..N (maximum {maximum})')
+    if any(not value or len(value.encode('utf-8')) >= 49 for value in entries.values()):
+        raise ValueError(f'[{section}] has an empty or oversized name')
+    return [entries[i] for i in sorted(entries)]
+
+
+def apply_patch(cp, patch, data):
+    if not cp.has_section(patch):
+        raise ValueError('patch section missing')
+    writes = []
+    for i in (1, 2):
+        key = f'Signature_{i}'
+        if not cp.has_option(patch, key):
+            if i == 1 or cp.has_option(patch, f'Value_{i}') or cp.has_option(patch, f'Offset_{i}'):
+                raise ValueError(f'missing {key}')
+            break
+        signature = parse_sig(cp.get(patch, key))
+        found = matches(data, signature)
+        if len(found) != 1:
+            raise ValueError(f'{key}: expected one match, found {"2+" if len(found) > 1 else 0}')
+        value_text = cp.get(patch, f'Value_{i}')
+        if '??' in value_text:
+            raise ValueError('replacement cannot contain wildcards')
+        value = bytes(parse_sig(value_text))
+        offset = int(cp.get(patch, f'Offset_{i}', fallback='0'), 10)
+        start = found[0] + offset
+        if offset < 0 or start + len(value) > len(data):
+            raise ValueError(f'Value_{i}: write outside returned file bytes')
+        writes.append((start, value))
+    if len(writes) == 2:
+        (a, av), (b, bv) = writes
+        if a < b + len(bv) and b < a + len(av):
+            raise ValueError('paired writes overlap')
+    # Validate all signatures before applying either half, just like the DLL.
+    patched = bytearray(data)
+    for start, value in writes:
+        patched[start:start + len(value)] = value
+    return bytes(patched)
+
+
+def verify(cfg_path, spa_dir):
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.optionxform = str
+    try:
+        with open(cfg_path, encoding='utf-8-sig') as config:
+            cp.read_file(config)
+        if not cp.has_section('Buffer_modify'):
+            raise ValueError('missing [Buffer_modify]')
+        if cp.get('Buffer_modify', 'Enable', fallback='0') != '1':
+            print('Buffer_modify disabled; JS patches NOT verified.')
+            return 0
+        targets = numbered(cp, 'Buffer_modify', 10)
+        root = Path(spa_dir).resolve()
+        checked = 0
+        failures = []
+        for target in targets:
+            try:
+                path = (root / target).resolve()
+                if not path.is_relative_to(root):
+                    raise ValueError('target escapes bundle directory')
+                data = path.read_bytes()
+                patches = numbered(cp, target, 10)
+                for patch in patches:
+                    try:
+                        data = apply_patch(cp, patch, data)
+                        checked += 1
+                        print(f'OK    {target} / {patch}')
+                    except (ValueError, configparser.Error) as error:
+                        failures.append(f'{target} / {patch}: {error}')
+            except (OSError, ValueError) as error:
+                failures.append(f'{target}: {error}')
+        if failures:
+            print('\nBROKEN:')
+            for failure in failures:
+                print(f'FAIL  {failure}')
+            return 1
+        print(f'\nAll {checked} JS patch group(s) have unique matches and bounded writes.')
+        print('Static JS check only; native hook installation and audio blocking are NOT verified here.')
+        return 0
+    except (OSError, ValueError, configparser.Error) as error:
+        print(f'FAIL  config: {error}')
+        return 1
 
 
 def main():
     if len(sys.argv) != 3:
-        print("usage: verify_patches.py <config.ini> <xpui-dir>", file=sys.stderr)
+        print('usage: verify_patches.py <config.ini> <xpui-dir>', file=sys.stderr)
         return 2
-    cfg_path, spa_dir = sys.argv[1], sys.argv[2]
-
-    cp = configparser.ConfigParser(interpolation=None, strict=False)
-    cp.optionxform = str  # preserve key case (Signature_1)
-    cp.read(cfg_path, encoding="utf-8")
-
-    if not cp.has_section("Buffer_modify") or cp.get("Buffer_modify", "Enable", fallback="0") != "1":
-        print("Buffer_modify disabled or absent; nothing to verify.")
-        return 0
-
-    targets = [v for k, v in cp.items("Buffer_modify") if k.isdigit()]
-    fails, checked = [], 0
-
-    for tf in targets:
-        path = os.path.join(spa_dir, tf)
-        if not os.path.exists(path):
-            fails.append((tf, "<file>", "target file missing from spa"))
-            continue
-        data = open(path, "rb").read()
-        if not cp.has_section(tf):
-            continue
-        for pn in [v for k, v in cp.items(tf) if k.isdigit()]:
-            if not cp.has_section(pn):
-                fails.append((tf, pn, "patch section missing"))
-                continue
-            sighex = cp.get(pn, "Signature_1", fallback=None)
-            if not sighex:
-                fails.append((tf, pn, "no Signature_1"))
-                continue
-            checked += 1
-            if find(data, parse_sig(sighex)) < 0:
-                fails.append((tf, pn, "signature no longer matches"))
-            else:
-                print(f"OK    {tf} / {pn}")
-
-    if fails:
-        print("\nBROKEN:")
-        for tf, pn, why in fails:
-            print(f"FAIL  {tf} / {pn}: {why}")
-        return 1
-
-    print(f"\nAll {checked} patch signature(s) still match.")
-    return 0
+    return verify(*sys.argv[1:])
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())

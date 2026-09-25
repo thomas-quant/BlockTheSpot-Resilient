@@ -36,6 +36,9 @@
     <ClInclude Include="IAT_hook.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="import_hook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="kill_crashpad.h">
       <Filter>Header Files</Filter>
     </ClInclude>

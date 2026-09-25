@@ -1,18 +1,14 @@
 name: Watch Spotify and Auto-Build
 
-# Detects new Spotify desktop releases, verifies our config.ini patch signatures
-# still match the new bundles, publishes a fresh build, and opens an issue if a
-# JS patch (e.g. the leaderboard banner kill) went stale. The DLLs are version-
-# agnostic (runtime CEF offset detection), so the real value here is the verify +
-# alert, not the rebuild itself.
-
+# Run the same native + JS + real-client checks as branch CI, even if the
+# installer version is unchanged. Never publish unverified binaries.
 on:
   schedule:
-    - cron: '17 6 * * *'   # daily ~06:17 UTC (adjust cadence as desired)
+    - cron: '17 6 * * *'
   workflow_dispatch:
     inputs:
       force:
-        description: "Build even if the Spotify version hasn't changed"
+        description: Publish even if the Spotify version has not changed
         type: boolean
         default: false
 
@@ -25,123 +21,78 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  watch:
-    runs-on: windows-2022
+  verify:
+    if: github.ref == 'refs/heads/master'
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install latest Spotify (silent) and read version
-        id: spot
-        shell: pwsh
-        run: |
-          $setup = Join-Path $env:RUNNER_TEMP 'SpotifyFullSetupX64.exe'
-          Write-Host 'Downloading Spotify full installer...'
-          Invoke-WebRequest 'https://download.scdn.co/SpotifyFullSetupX64.exe' -OutFile $setup
-          Start-Process -FilePath $setup -ArgumentList '/silent' | Out-Null
-          $exe = Join-Path $env:APPDATA 'Spotify\Spotify.exe'
-          $deadline = (Get-Date).AddMinutes(8)
-          while (-not (Test-Path $exe) -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
-          if (-not (Test-Path $exe)) { throw 'Spotify did not install within 8 minutes' }
-          Start-Sleep 5
-          Get-Process Spotify -ErrorAction SilentlyContinue | Stop-Process -Force
-          $ver = (Get-Item $exe).VersionInfo.FileVersion
-          Write-Host "Installed Spotify version: $ver"
-          "version=$ver" >> $env:GITHUB_OUTPUT
-          "spa=$(Join-Path $env:APPDATA 'Spotify\Apps\xpui.spa')" >> $env:GITHUB_OUTPUT
-
-      - name: Decide whether to build
+      - name: Decide whether to publish
         id: check
-        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.spotify_version }}
+          FORCE: ${{ inputs.force }}
         run: |
-          $cur = '${{ steps.spot.outputs.version }}'
-          $marker = '.watched-spotify-version'
-          $prev = ''
-          if (Test-Path $marker) { $prev = (Get-Content $marker -Raw).Trim() }
-          $force = '${{ github.event.inputs.force }}' -eq 'true'
-          $changed = $force -or ($cur -ne $prev)
-          Write-Host "current=$cur previous=$prev force=$force -> changed=$changed"
-          "changed=$($changed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-
-      - name: Extract xpui.spa
+          previous=$(tr -d '\r\n' < .watched-spotify-version)
+          if [ "$VERSION" != "$previous" ] || [ "$FORCE" = 'true' ]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
         if: steps.check.outputs.changed == 'true'
-        shell: pwsh
+        with:
+          name: BlockTheSpot-Resilient-windows-x64
+          path: dist
+      - name: Prepare scoped release notes
+        if: steps.check.outputs.changed == 'true'
+        shell: python
         run: |
-          $zip = Join-Path $env:RUNNER_TEMP 'xpui.zip'
-          Copy-Item '${{ steps.spot.outputs.spa }}' $zip -Force
-          $dir = Join-Path $env:RUNNER_TEMP 'xpui'
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-          "XPUI_DIR=$dir" >> $env:GITHUB_ENV
-
-      - name: Verify patch signatures still match
-        if: steps.check.outputs.changed == 'true'
-        id: verify
-        shell: pwsh
-        run: |
-          $out = (python tools/verify_patches.py config.ini "$env:XPUI_DIR" 2>&1 | Out-String)
-          Write-Host $out
-          $ok = $LASTEXITCODE -eq 0
-          $out | Out-File -FilePath (Join-Path $env:RUNNER_TEMP 'verify.txt') -Encoding utf8
-          "ok=$($ok.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-
-      - name: Set up MSBuild
-        if: steps.check.outputs.changed == 'true'
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Build DLLs
-        if: steps.check.outputs.changed == 'true'
-        shell: pwsh
-        run: |
-          msbuild Hook/Hook.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir="$env:GITHUB_WORKSPACE\\"
-          msbuild Loader/Loader.vcxproj /m /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$env:GITHUB_WORKSPACE\\"
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item out/x64/Release/blockthespot.dll dist/ -Force
-          Copy-Item out/x64/Debug/chrome_elf.dll dist/ -Force
-          Copy-Item config.ini dist/ -Force
-
-      - name: Publish release
+          from pathlib import Path
+          notes = '\n\n'.join((Path('dist') / name).read_text(encoding='utf-8-sig') for name in ('build.txt', 'verify.txt', 'smoke.txt'))
+          Path('release-notes.md').write_text(notes, encoding='utf-8')
+      - name: Publish verified release
         if: steps.check.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.spot.outputs.version }}-auto.${{ github.run_number }}
-          name: BlockTheSpot ${{ steps.spot.outputs.version }}${{ steps.verify.outputs.ok != 'true' && ' (patch needs attention)' || '' }}
-          prerelease: ${{ steps.verify.outputs.ok != 'true' }}
-          body_path: ${{ runner.temp }}/verify.txt
+          tag_name: v${{ needs.verify.outputs.spotify_version }}-auto.${{ github.run_number }}
+          name: BlockTheSpot ${{ needs.verify.outputs.spotify_version }}
+          body_path: release-notes.md
           files: |
             dist/blockthespot.dll
             dist/chrome_elf.dll
             dist/config.ini
-
-      - name: Record new version
+      - name: Record verified version
         if: steps.check.outputs.changed == 'true'
-        continue-on-error: true
-        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.spotify_version }}
         run: |
-          '${{ steps.spot.outputs.version }}' | Out-File -FilePath .watched-spotify-version -Encoding ascii -NoNewline
+          printf '%s' "$VERSION" > .watched-spotify-version
           git config user.name 'github-actions'
           git config user.email 'github-actions@github.com'
           git add .watched-spotify-version
-          git commit -m "[skip ci] watched Spotify ${{ steps.spot.outputs.version }}"
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "[skip ci] watched Spotify $VERSION"
+            git push
+          fi
 
-      - name: Open issue if a patch broke
-        if: steps.check.outputs.changed == 'true' && steps.verify.outputs.ok != 'true'
-        shell: pwsh
+  alert:
+    needs: verify
+    if: always() && needs.verify.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update compatibility alert
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          $rep = Get-Content (Join-Path $env:RUNNER_TEMP 'verify.txt') -Raw
-          $body = @"
-          Spotify updated to **${{ steps.spot.outputs.version }}** and one or more ``config.ini`` patch signatures no longer match.
-
-          The URL blocklist and the DLLs still work (ad *fetches* stay blocked); only the affected JS patch — e.g. the leaderboard banner kill — may be a no-op until re-derived.
-
-          Verifier output:
-          ``````
-          $rep
-          ``````
-          **Re-derive drill:** extract ``%APPDATA%\Spotify\Apps\xpui.spa`` (it's a zip), grep the un-hashed ``dwp-*`` / ``xpui-*`` bundle for the target, anchor the signature on stable tokens + ``??`` wildcards, and verify with ``python tools/verify_patches.py config.ini <extracted-dir>``.
-          "@
-          $body | Out-File -FilePath issue.md -Encoding utf8
-          gh issue create --title "Spotify ${{ steps.spot.outputs.version }}: patch signature needs re-deriving" --body-file issue.md
-
-# registered 2026-07-04T07:03:39Z
+          title='Spotify compatibility verification failed'
+          body="Verification failed: $RUN_URL. No release was published. Inspect the failing step and verification-reports artifact; this can be a build, download, JS, native-hook or startup failure. Audio blocking is not established by the startup smoke test."
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

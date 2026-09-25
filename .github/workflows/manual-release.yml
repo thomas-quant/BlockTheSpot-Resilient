@@ -4,101 +4,63 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Optional release tag. Leave empty to auto-generate one."
-        required: false
+        description: Optional release tag (defaults to tested Spotify version + run number)
         type: string
       release_name:
-        description: "Optional release name. Leave empty to use the generated default."
-        required: false
+        description: Optional release name
         type: string
       prerelease:
-        description: "Mark the GitHub release as a prerelease."
-        required: false
-        default: false
+        description: Mark the release as a prerelease
         type: boolean
+        default: false
       draft:
-        description: "Create the GitHub release as a draft."
-        required: false
-        default: false
+        description: Create a draft release
         type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: windows-2022
+  verify:
+    if: github.ref == 'refs/heads/master'
+    uses: ./.github/workflows/ci.yml
 
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
     steps:
-      - name: Ensure workflow runs from master
-        if: github.ref_name != 'master'
-        shell: pwsh
-        run: |
-          Write-Error "This workflow can only be run from the master branch."
-          exit 1
-
-      - uses: actions/checkout@v4
-
-      - name: Set up MSBuild
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Resolve release metadata
+      - uses: actions/download-artifact@v4
+        with:
+          name: BlockTheSpot-Resilient-windows-x64
+          path: dist
+      - name: Resolve metadata from tested client
         id: meta
-        shell: pwsh
+        env:
+          VERSION: ${{ needs.verify.outputs.spotify_version }}
+          TAG: ${{ inputs.tag_name }}
+          NAME: ${{ inputs.release_name }}
+        shell: python
         run: |
-          $spotifyVersion = (Get-Content config.ini | Select-Object -First 2 | Select-Object -Last 1).TrimStart(";").Trim()
-          $tag = "${{ inputs.tag_name }}"
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "v$spotifyVersion-build.${{ github.run_number }}"
-          }
-
-          $releaseName = "${{ inputs.release_name }}"
-          if ([string]::IsNullOrWhiteSpace($releaseName)) {
-            $releaseName = "BlockTheSpot $spotifyVersion"
-          }
-
-          $releaseBody = @"
-          Manual release built from master.
-
-          Spotify version: $spotifyVersion
-          Commit: $env:GITHUB_SHA
-          Workflow run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
-          "@
-
-          "spotify_version=$spotifyVersion" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "release_name=$releaseName" >> $env:GITHUB_OUTPUT
-          $bodyPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
-          $releaseBody | Set-Content -Path $bodyPath -NoNewline
-          "body_path=$bodyPath" >> $env:GITHUB_OUTPUT
-
-      - name: Build Release hook DLL
-        shell: pwsh
-        run: msbuild Hook/Hook.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:SolutionDir="$env:GITHUB_WORKSPACE\\"
-
-      - name: Build Debug loader DLL
-        shell: pwsh
-        run: msbuild Loader/Loader.vcxproj /m /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir="$env:GITHUB_WORKSPACE\\"
-
-      - name: Collect release assets
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item out/x64/Release/blockthespot.dll dist/blockthespot.dll -Force
-          Copy-Item out/x64/Debug/chrome_elf.dll dist/chrome_elf.dll -Force
-          Copy-Item config.ini dist/config.ini -Force
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+          import os
+          from pathlib import Path
+          tag = os.environ['TAG'] or f"v{os.environ['VERSION']}-build.{os.environ['GITHUB_RUN_NUMBER']}"
+          name = os.environ['NAME'] or f"BlockTheSpot {os.environ['VERSION']}"
+          if any(c in tag + name for c in '\r\n'):
+              raise SystemExit('Release metadata must be single-line')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'tag={tag}\nname={name}\n')
+          notes = '\n\n'.join((Path('dist') / file).read_text(encoding='utf-8-sig') for file in ('build.txt', 'verify.txt', 'smoke.txt'))
+          Path('release-notes.md').write_text(notes, encoding='utf-8')
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.release_name }}
-          body_path: ${{ steps.meta.outputs.body_path }}
+          name: ${{ steps.meta.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          body_path: release-notes.md
           draft: ${{ inputs.draft }}
           prerelease: ${{ inputs.prerelease }}
           files: |
             dist/blockthespot.dll
             dist/chrome_elf.dll
             dist/config.ini
-
-# registered 2026-07-04T07:04:28Z

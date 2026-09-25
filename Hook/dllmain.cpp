@@ -27,7 +27,9 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 			}
 		}
 	}
-	if (DLL_PROCESS_DETACH == ul_reason_for_call) {
+	// At process termination Windows has already stopped other threads. Waiting
+	// for the logger under the loader lock can deadlock; let the OS close handles.
+	if (DLL_PROCESS_DETACH == ul_reason_for_call && lpReserved == nullptr) {
 		LPWSTR cmd = GetCommandLineW();
 		if (NULL == wcsstr(cmd, L"--type=") &&
 			NULL == wcsstr(cmd, L"--url=")) {

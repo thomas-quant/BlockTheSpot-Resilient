@@ -1,78 +1,42 @@
 #include "pch.h"
 #include "libcef_hook.h"
-#include "IAT_hook.h"
 #include "cef_url_hook.h"
 #include "cef_zip_reader_hook.h"
 
-static FARPROC WINAPI GetProcAddress_hook(HMODULE hModule, LPCSTR lpProcName)
-{
-	if (!lpProcName || 0 == HIWORD(lpProcName))
-		return GetProcAddress_orig(hModule, lpProcName);
+static HMODULE cef_module = nullptr;
+static bool url_available = false;
+static bool zip_available = false;
 
-	if (0 == lstrcmpiA(lpProcName, "cef_urlrequest_create")) {
-		if (hModule == GetModuleHandleW(L"libcef.dll")) {
-			return reinterpret_cast<FARPROC>(cef_urlrequest_create_stub);
-		}
-	}
-	if (0 == lstrcmpiA(lpProcName, "cef_zip_reader_create")) {
-		if (hModule == GetModuleHandleW(L"libcef.dll")) {
-			return reinterpret_cast<FARPROC>(cef_zip_reader_create_stub);
-		}
-	}
-	return GetProcAddress_orig(hModule, lpProcName);
+void configure_cef_interception(HMODULE libcef, bool url_ready, bool zip_ready) noexcept
+{
+    cef_module = libcef;
+    url_available = url_ready;
+    zip_available = zip_ready;
 }
 
-// https://www.ired.team/offensive-security/code-injection-process-injection/import-adress-table-iat-hooking
-bool libcef_IAT_hook_GetProcAddress(HMODULE spotify_dll_handle) noexcept
+FARPROC cef_hook_for_proc(HMODULE module, LPCSTR name) noexcept
 {
-	if (!spotify_dll_handle) return false;
+    if (!cef_module || module != cef_module || !name || IS_INTRESOURCE(name)) return nullptr;
+    if (url_available && !strcmp(name, "cef_urlrequest_create"))
+        return reinterpret_cast<FARPROC>(cef_urlrequest_create_stub);
+    if (zip_available && !strcmp(name, "cef_zip_reader_create"))
+        return reinterpret_cast<FARPROC>(cef_zip_reader_create_stub);
+    return nullptr;
+}
 
-	if (nullptr == ImageDirectoryEntryToDataEx) {
-		OutputDebugStringW(L"libcef_IAT_hook_GetProcAddress: ImageDirectoryEntryToDataEx is null.");
-		return false;
-	}
-
-	ULONG size = 0;
-	PIMAGE_IMPORT_DESCRIPTOR imports =
-		reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(ImageDirectoryEntryToDataEx(
-			spotify_dll_handle,
-			TRUE, // image is loaded in memory
-			IMAGE_DIRECTORY_ENTRY_IMPORT,
-			&size,
-			NULL
-		));
-
-	if (nullptr == imports) {
-		return false;
-	}
-
-	for (; imports->Name; ++imports) {
-		LPCSTR dll_name = reinterpret_cast<LPCSTR>(
-			reinterpret_cast<BYTE*>(spotify_dll_handle) + imports->Name
-			);
-
-		// GetProcAddress is in kernel32
-		if (0 == lstrcmpiA(dll_name, "kernel32.dll")) {
-
-			PIMAGE_THUNK_DATA thunk = reinterpret_cast<PIMAGE_THUNK_DATA>(
-				reinterpret_cast<BYTE*>(spotify_dll_handle) + imports->FirstThunk
-				);
-
-			for (; thunk->u1.Function; ++thunk) {
-				PROC* func = reinterpret_cast<PROC*>(&thunk->u1.Function);
-
-				if (*func == reinterpret_cast<PROC>(GetProcAddress)) {
-					DWORD oldProtect;
-					VirtualProtect(func, sizeof(PROC), PAGE_READWRITE, &oldProtect);
-
-					GetProcAddress_orig = reinterpret_cast<GetProcAddress_t>(*func);
-					*func = reinterpret_cast<PROC>(GetProcAddress_hook);
-
-					VirtualProtect(func, sizeof(PROC), oldProtect, &oldProtect);
-					return true;
-				}
-			}
-		}
-	}
-	return false;
+cef_import_result hook_libcef_imports(HMODULE module) noexcept
+{
+    // Adapted from MichaelMiksa's by-name delay-IAT fix (August 2026):
+    // https://github.com/MichaelMiksa/BlockTheSpot---continued/commit/7725515
+    // Intercept unresolved AND resolved slots, without invoking their thunks.
+    // Also cover ordinary imports, validate bounds/protections, and report both
+    // functions separately so a partial installation cannot look successful.
+    cef_import_result out;
+    if (url_available)
+        out.url = imports::patch(module, "libcef.dll", "cef_urlrequest_create",
+            reinterpret_cast<FARPROC>(cef_urlrequest_create_stub));
+    if (zip_available)
+        out.zip = imports::patch(module, "libcef.dll", "cef_zip_reader_create",
+            reinterpret_cast<FARPROC>(cef_zip_reader_create_stub));
+    return out;
 }

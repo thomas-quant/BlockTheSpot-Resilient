@@ -85,12 +85,34 @@ bool DataCompare(BYTE* pData, BYTE* bSig, char* szMask) noexcept
 
 BYTE* FindPattern(BYTE* dwAddress, DWORD dwSize, BYTE* pbSig, char* szMask) noexcept
 {
-	for (DWORD i = NULL; i < dwSize; ++i)
-	{
-		if (DataCompare(dwAddress + i, pbSig, szMask))
-			return dwAddress + i;
-	}
+	if (!dwAddress || !pbSig || !szMask) return nullptr;
+	const auto length = strlen(szMask);
+	if (!length || length > dwSize) return nullptr;
+	for (size_t i = 0; i <= dwSize - length; ++i)
+		if (DataCompare(dwAddress + i, pbSig, szMask)) return dwAddress + i;
 	return nullptr;
+}
+
+bool apply_modifications(void* buffer, size_t length, Modify* patches, size_t count) noexcept
+{
+	if (!buffer || !patches || !count || count > 2 || length > MAXDWORD) return false;
+	auto data = static_cast<BYTE*>(buffer);
+	size_t starts[2]{};
+	for (size_t i = 0; i < count; ++i) {
+		auto& p = patches[i];
+		const auto address = FindPattern(data, static_cast<DWORD>(length), p.signature, p.mask);
+		if (!address || !p.patch_size || p.patch_size > sizeof(p.value)) return false;
+		const auto found = static_cast<size_t>(address - data);
+		// Ambiguous patterns are not safe to patch automatically.
+		if (FindPattern(address + 1, static_cast<DWORD>(length - found - 1), p.signature, p.mask)) return false;
+		if (p.offset > length - found || p.patch_size > length - found - p.offset) return false;
+		starts[i] = found + p.offset;
+	}
+	if (count == 2 && starts[0] < starts[1] + patches[1].patch_size &&
+		starts[1] < starts[0] + patches[0].patch_size) return false;
+	for (size_t i = 0; i < count; ++i)
+		memcpy(data + starts[i], patches[i].value, patches[i].patch_size);
+	return true;
 }
 
 // return SIZE_MAX on error.
@@ -132,9 +154,9 @@ size_t parse_signaure(
 		if (i + 1 >= src_len)
 			return SIZE_MAX;
 
-		const BYTE b = hex_pair(src[i], src[i + 1]);
-		if (b == 0xFF)
+		if (hexchar(src[i]) == 0xFF || hexchar(src[i + 1]) == 0xFF)
 			return SIZE_MAX;
+		const BYTE b = hex_pair(src[i], src[i + 1]);
 
 		if (out >= limit)
 			return SIZE_MAX;
@@ -172,9 +194,9 @@ size_t parse_hex(
 		if (i + 1 >= src_len)
 			return SIZE_MAX;  // invalid
 
-		const BYTE b = hex_pair(src[i], src[i + 1]);
-		if (b == 0xFF)
+		if (hexchar(src[i]) == 0xFF || hexchar(src[i + 1]) == 0xFF)
 			return SIZE_MAX;  // invalid hex
+		const BYTE b = hex_pair(src[i], src[i + 1]);
 
 		if (out >= out_cap)
 			return SIZE_MAX;  // overflow

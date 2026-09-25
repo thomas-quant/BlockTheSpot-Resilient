@@ -1,7 +1,7 @@
 #pragma once
 #include "pch.h"
 
-// Runtime resolution of CEF C-API struct offsets, plus libcef.dll's mapped
+// Version-keyed CEF C-API struct defaults, plus libcef.dll's mapped
 // image range used to validate CEF function pointers before we call through
 // them (see get_funct_guarded in funct_pointer.h).
 //
@@ -9,9 +9,10 @@
 // is fixed for a given CEF version; an offset only shifts when CEF changes a
 // struct (adds/reorders a method, or grows the ref-counted base). We keep the
 // compiled-in defaults (which match the libcef in current Spotify builds) and
-// apply a per-version override only if a future CEF build moves them. Combined
-// with the module-range guard, an unknown/wrong offset degrades to
-// "ad-block temporarily off" instead of an access-violation crash.
+// apply a per-version override only if a future CEF build moves them. This is
+// not ABI discovery: bounds/range/executable checks reject many bad offsets,
+// but cannot identify a different valid method in the same module. CI exercises
+// startup callbacks; neither guards nor CI guarantee all future versions work.
 
 struct libcef_range_t {
 	uintptr_t base = 0;

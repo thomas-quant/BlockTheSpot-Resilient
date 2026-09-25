@@ -28,6 +28,7 @@ struct Log_work
 };
 
 static inline Log_work logger;
+static SRWLOCK ring_lock = SRWLOCK_INIT;
 
 static inline size_t ring_next(size_t idx) noexcept
 {
@@ -91,6 +92,7 @@ VOID CALLBACK log_work(ULONG_PTR param)
 	}
 
 	size_t bulk_used = 0;
+	AcquireSRWLockExclusive(&ring_lock);
 	for (; logger.read != logger.write; )
 	{
 		const auto& entry = logger.buffer[logger.read];
@@ -125,6 +127,7 @@ VOID CALLBACK log_work(ULONG_PTR param)
 		logger.read = ring_next(logger.read);
 	}
 
+	ReleaseSRWLockExclusive(&ring_lock);
 	if (0 == bulk_used)
 		return;
 
@@ -153,10 +156,12 @@ static inline void log_message(Log_level level, const char* message) noexcept
 		return;
 	}
 
+	AcquireSRWLockExclusive(&ring_lock);
 	const auto current = logger.write;
 	const size_t next = ring_next(current);
 
 	if (next == logger.read) {
+		ReleaseSRWLockExclusive(&ring_lock);
 		OutputDebugStringW(L"Logger buffer full, dropping log message\n");
 		return;
 	}
@@ -169,8 +174,7 @@ static inline void log_message(Log_level level, const char* message) noexcept
 		_TRUNCATE
 	);
 	logger.write = next;
-
-	//QueueUserAPC(log_work, logger.log_thread, 0);
+	ReleaseSRWLockExclusive(&ring_lock);
 }
 
 void log_any_noop(const char* message) noexcept {}
@@ -207,7 +211,7 @@ void init_log_thread() noexcept
 	}
 
 	if (!logger.timer) {
-		logger.timer = CreateWaitableTimerW(nullptr, FALSE, L"Log Interval");
+		logger.timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
 		if (!logger.timer) {
 			OutputDebugStringW(L"init_log_thread: CreateWaitableTimerW fail!\n");
 			return;
@@ -215,7 +219,7 @@ void init_log_thread() noexcept
 	}
 	if (!logger.stop_event) {
 		logger.stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-		if (!logger.timer) {
+		if (!logger.stop_event) {
 			OutputDebugStringW(L"init_log_thread: CreateEventW fail!\n");
 			return;
 		}
@@ -271,16 +275,16 @@ void stop_log() noexcept
 		SetEvent(logger.stop_event);
 	}
 
+	if (logger.log_thread) {
+		WaitForSingleObject(logger.log_thread, INFINITE);
+		CloseHandle(logger.log_thread);
+		log_work(0);
+	}
 	if (logger.timer) {
 		CancelWaitableTimer(logger.timer);
 		CloseHandle(logger.timer);
 	}
-
-	if (logger.log_thread) {
-		// Wait for thread to exit
-		WaitForSingleObject(logger.log_thread, INFINITE);
-		CloseHandle(logger.log_thread);
-	}
+	if (logger.stop_event) CloseHandle(logger.stop_event);
 
 	if (logger.log_file != INVALID_HANDLE_VALUE) {
 		CloseHandle(logger.log_file);

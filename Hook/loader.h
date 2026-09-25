@@ -5,17 +5,7 @@
 inline constexpr auto ORIGINAL_CHROME_ELF_DLL = L"./chrome_elf_required.dll";
 inline constexpr auto CONFIG_FILEW = L"./config.ini";
 inline constexpr auto CONFIG_FILEA = "./config.ini";
-inline constexpr auto LOG_FILEW = L"./fucking.log";
-
-using ImageDirectoryEntryToDataEx_t = PVOID(WINAPI*)(
-	PVOID Base,
-	BOOLEAN MappedAsImage,
-	USHORT DirectoryEntry,
-	PULONG Size,
-	PIMAGE_SECTION_HEADER* FoundHeader
-	);
-
-inline ImageDirectoryEntryToDataEx_t ImageDirectoryEntryToDataEx = nullptr;
+inline constexpr auto LOG_FILEW = L"./blockthespot.log";
 
 constexpr size_t SHARED_BUFFER_SIZE = 1024; // increase if need.
 inline char shared_buffer[SHARED_BUFFER_SIZE];

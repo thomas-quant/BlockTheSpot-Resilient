@@ -22,6 +22,9 @@ BYTE* FindPattern(BYTE* dwAddress, DWORD dwSize, BYTE* pbSig, char* szMask) noex
 
 bool get_text_section(HMODULE module, DLL_section* const dll_section) noexcept;
 
+// Validate unique matches, bounds and paired writes before changing any bytes.
+bool apply_modifications(void* buffer, size_t length, Modify* patches, size_t count) noexcept;
+
 size_t parse_signaure(
 	const char* src,
 	size_t src_len,

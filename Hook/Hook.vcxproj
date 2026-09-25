@@ -183,6 +183,7 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="funct_pointer.h" />
     <ClInclude Include="IAT_hook.h" />
+    <ClInclude Include="import_hook.h" />
     <ClInclude Include="kill_crashpad.h" />
     <ClInclude Include="libcef_hook.h" />
     <ClInclude Include="loader.h" />

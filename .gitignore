@@ -19,3 +19,8 @@
 /tmp_extract_all
 /tmp_live_backup_*/
 /dump_*.js
+/artifacts/
+/reports/
+__pycache__/
+*.pyc
+*.obj
