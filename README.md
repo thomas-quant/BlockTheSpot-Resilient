@@ -76,7 +76,7 @@ Cheap cross-platform checks:
 
 ```sh
 python -m unittest discover -s tests -p 'test_*.py' -v
-python tools/verify_patches.py config.ini <extracted-xpui-directory>
+python tools/verify_patches.py config.ini <path-to-xpui.spa>
 ```
 
 Windows builds/tests use `tools/build-and-test.ps1` in an x64 MSVC developer shell. GitHub Actions runs this automatically on branches and uploads DLLs plus verification reports. The installer and smoke-test scripts under `tools/` are restricted to disposable GitHub-hosted runners and must not be used against a personal installation.

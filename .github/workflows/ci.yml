@@ -41,11 +41,7 @@ jobs:
           SPA: ${{ steps.spotify.outputs.spa }}
         run: |
           New-Item -ItemType Directory -Force reports | Out-Null
-          $zip = Join-Path $env:RUNNER_TEMP 'xpui.zip'
-          $dir = Join-Path $env:RUNNER_TEMP 'xpui'
-          Copy-Item $env:SPA $zip
-          Expand-Archive $zip $dir -Force
-          python tools/verify_patches.py config.ini $dir | Tee-Object reports/verify.txt
+          python tools/verify_patches.py config.ini $env:SPA | Tee-Object reports/verify.txt
           if ($LASTEXITCODE -ne 0) { throw 'JS patch verification failed' }
       - name: Exercise native hooks in real Spotify
         shell: pwsh

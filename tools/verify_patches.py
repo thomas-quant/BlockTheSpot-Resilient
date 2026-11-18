@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Validate the configured SPA patches, not native hook installation or playback.
 
-Usage: verify_patches.py <config.ini> <extracted-xpui-dir>
+Usage: verify_patches.py <config.ini> <xpui.spa | extracted-xpui-dir>
 Mirrors runtime ordering, unique matches, paired-patch atomicity and write bounds.
 Never modifies the input bundles. Native installation is checked separately by CI.
 """
 import configparser
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 
@@ -81,7 +82,28 @@ def apply_patch(cp, patch, data):
     return bytes(patched)
 
 
-def verify(cfg_path, spa_dir):
+def bundle_reader(spa_path):
+    path = Path(spa_path)
+    if path.is_file():
+        bundle = zipfile.ZipFile(path)
+
+        def read(target):
+            try:
+                return bundle.read(target)
+            except KeyError:
+                raise ValueError('not present in bundle') from None
+        return read, bundle.close
+    root = path.resolve()
+
+    def read(target):
+        file = (root / target).resolve()
+        if not file.is_relative_to(root):
+            raise ValueError('target escapes bundle directory')
+        return file.read_bytes()
+    return read, lambda: None
+
+
+def verify(cfg_path, spa_path):
     cp = configparser.ConfigParser(interpolation=None)
     cp.optionxform = str
     try:
@@ -93,15 +115,12 @@ def verify(cfg_path, spa_dir):
             print('Buffer_modify disabled; JS patches NOT verified.')
             return 0
         targets = numbered(cp, 'Buffer_modify', 10)
-        root = Path(spa_dir).resolve()
+        read, close = bundle_reader(spa_path)
         checked = 0
         failures = []
         for target in targets:
             try:
-                path = (root / target).resolve()
-                if not path.is_relative_to(root):
-                    raise ValueError('target escapes bundle directory')
-                data = path.read_bytes()
+                data = read(target)
                 patches = numbered(cp, target, 10)
                 for patch in patches:
                     try:
@@ -110,8 +129,9 @@ def verify(cfg_path, spa_dir):
                         print(f'OK    {target} / {patch}')
                     except (ValueError, configparser.Error) as error:
                         failures.append(f'{target} / {patch}: {error}')
-            except (OSError, ValueError) as error:
+            except (OSError, ValueError, zipfile.BadZipFile) as error:
                 failures.append(f'{target}: {error}')
+        close()
         if failures:
             print('\nBROKEN:')
             for failure in failures:
@@ -120,14 +140,14 @@ def verify(cfg_path, spa_dir):
         print(f'\nAll {checked} JS patch group(s) have unique matches and bounded writes.')
         print('Static JS check only; native hook installation and audio blocking are NOT verified here.')
         return 0
-    except (OSError, ValueError, configparser.Error) as error:
+    except (OSError, ValueError, configparser.Error, zipfile.BadZipFile) as error:
         print(f'FAIL  config: {error}')
         return 1
 
 
 def main():
     if len(sys.argv) != 3:
-        print('usage: verify_patches.py <config.ini> <xpui-dir>', file=sys.stderr)
+        print('usage: verify_patches.py <config.ini> <xpui.spa | xpui-dir>', file=sys.stderr)
         return 2
     return verify(*sys.argv[1:])
 
